@@ -10,7 +10,8 @@ This chapter covers the specific implementation details for model registration..
 
 ## Pybiscus plugins
 
-At launch, pybiscus looks for the file defined in environment variable PYBISCUS_PLUGIN_CONF_PATH
+At launch, pybiscus looks for the file (or comma-separated list of files and directories)
+defined in environment variable PYBISCUS_PLUGIN_CONF_PATH (may be defined in a file named pybiscus.env),
 or by default at pybiscus-plugins-conf.yml .
 
 It contains the definition of plugins that will be loaded :

@@ -1,9 +1,10 @@
 
 import os
-
 from pathlib import Path
 
+
 _plugins_by_category = None
+
 
 def get_plugins_by_category():
 
@@ -12,12 +13,10 @@ def get_plugins_by_category():
     if _plugins_by_category is None:
 
         try:
-            from pybiscus.commands.apps_common import load_config
+            from pybiscus.commands.apps_common import load_config_with_env
             from pybiscus.plugin.pluginmanager import load_plugins
 
-            config_file_path = Path(os.getenv('PYBISCUS_PLUGIN_CONF_PATH', "pybiscus-plugins-conf.yml"))
-            print(f"🔍 [plugins] Using config file: {config_file_path}")
-            config = load_config(config_file_path)
+            config = load_config_with_env(env_var = "PYBISCUS_PLUGIN_CONF_PATH", default = "pybiscus-plugins-conf.yml")
             _plugins_by_category = load_plugins(config, verbose=True)
 
         except Exception as e:
