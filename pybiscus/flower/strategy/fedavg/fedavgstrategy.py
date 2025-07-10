@@ -37,10 +37,10 @@ class ConfigFabricFedAvgStrategyData(BaseModel):
     # fraction_fit: float = 1,
     # fraction_evaluate: float = 1,
     # min_fit_clients: int = 2,
-    # min_evaluate_clients: int = 2,
-    # min_available_clients: int = 2,
 
     min_fit_clients: int = 2
+    min_evaluate_clients: int = 2
+    min_available_clients: int = 2
 
     model_config = ConfigDict(extra="forbid")
 
@@ -219,6 +219,16 @@ class FabricFedAvgStrategyFactory(FabricStrategyFactory):
         self.config=config
 
     def get_strategy(self):
+        # Extract epochs_per_round from config if available, else default to 1
+        epochs_per_round = 1
+        if hasattr(self, 'config') and hasattr(self.config, 'epochs_per_round'):
+            try:
+                epochs_per_round = int(self.config.epochs_per_round)
+            except Exception:
+                pass
+
+        def fit_config_with_epochs(server_round: int):
+            return fit_config(server_round, epochs_per_round)
 
         return FabricFedAvgStrategy(
             fit_metrics_aggregation_fn=weighted_average,
@@ -226,7 +236,7 @@ class FabricFedAvgStrategyFactory(FabricStrategyFactory):
             model=self.model,
             fabric=self.fabric,
             evaluate_fn=get_evaluate_fn(testset=self.testset, model=self.model, fabric=self.fabric),
-            on_fit_config_fn=fit_config,
+            on_fit_config_fn=fit_config_with_epochs,
             on_evaluate_config_fn=evaluate_config,
             initial_parameters=self.initial_parameters,
             **self.config.model_dump()

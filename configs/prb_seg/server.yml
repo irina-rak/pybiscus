@@ -1,4 +1,5 @@
 root_dir: ${oc.env:PWD}
+num_clients: '3'
 server_compute_context:
   hardware:
     accelerator: auto
@@ -9,6 +10,7 @@ server_compute_context:
       subdir: /experiments/node
 server_run:
   num_rounds: '10'
+  epochs_per_round: '1'
   logger:
     name: rich
     config:
@@ -16,21 +18,42 @@ server_run:
 strategy:
   name: fedavg
   config:
-    min_fit_clients: '2'
+    min_fit_clients: ${num_clients}
+    min_evaluate_clients: ${num_clients}
+    min_available_clients: ${num_clients}
 data:
-  name: cifar
+  name: pbr
   config:
-    dir_train: ${root_dir}/datasets/train/
-    dir_val: ${root_dir}/datasets/val/
-    dir_test: ${root_dir}/datasets/test/
-    batch_size: '32'
-    num_workers: '0'
+    dir_train: None
+    dir_val: None
+    dir_test: ${root_dir}/datasets/test_INT_URITOX/
+    augment: False
+    cache_rate: '1.0'
+    shape_img:
+      - '96'
+      - '96'
+      - '96'
+    batch_size: '1'
+    num_workers: '4'
 model:
-  name: cifar
+  name: pbr
   config:
-    input_shape: '3'
-    mid_shape: '6'
-    n_classes: '10'
+    spatial_dims: '3'
+    in_channels: '1'
+    out_channels: '4'
+    channels:
+      - '16'
+      - '32'
+      - '64'
+      - '128'
+      - '256'
+    strides:
+      - '2'
+      - '2'
+      - '2'
+      - '2'
+    num_res_units: '2'
+    norm: "BATCH"
     lr: '0.001'
 flower_server:
   listen_address: '[::]:3333'

@@ -82,6 +82,7 @@ class ConfigServerRun(BaseModel):
     PYBISCUS_CONFIG: ClassVar[str] = "server_run"
 
     num_rounds:        int = 10
+    epochs_per_round:  int = 1
     client_configs:    list[str] = []
     loggers:           list[LoggerConfig()] # pyright: ignore[reportInvalidTypeForm]
     reporting:         ConfigServerReporting
