@@ -127,6 +127,7 @@ class ConfigServer(BaseModel):
     Attributes
     ----------
     root_dir: str      = the path to a "root" directory, relatively to which can be found Data, Experiments and other useful directories
+    num_clients: int   = the number of clients to be used in the FL session.
     logger: str        = the config for the logger.
     strategy           = arguments for the needed Strategy
     fabric             = keywords for the Fabric instance
@@ -137,6 +138,7 @@ class ConfigServer(BaseModel):
     PYBISCUS_ALIAS: ClassVar[str] = "Pybiscus server configuration"
 
     root_dir:               str = "${oc.env:PWD}"
+    num_clients:            int = 2
     flower_server:          ConfigFlowerServer
     server_run:             ConfigServerRun
     server_compute_context: ConfigServerComputeContext

@@ -76,13 +76,13 @@ class ConfigModel_Unet(BaseModel):
 
     Attributes
     ----------
-    name:
-        designation "paroma" to choose
+    name: Literal["unet"]
+        designation "unet" to choose
     config:
-        configuration for the model LitPBR
+        configuration for the model LitUnet
     """
 
-    name: Literal["pbr"]
+    name: Literal["unet"]
     config: ConfigUnet
 
     model_config = ConfigDict(extra="forbid")

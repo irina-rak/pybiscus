@@ -233,6 +233,7 @@ def launch_config(
     fabric.launch()
 
     # load the model
+    # logm.console.log(f"---- Keys in model_registry: {model_registry().keys()}")
     model_class = model_registry()[conf.model.name]
     _model = model_class(**conf.model.config.model_dump())
 
@@ -254,14 +255,10 @@ def launch_config(
         initial_parameters_log_message = f"Loaded weights from {weights_path}"
 
     params = torch.nn.ParameterList(
-        [param.detach().cpu().numpy() for param in model.parameters()]
+        [param.detach().cpu().numpy() for _, param in model.state_dict().items()]
     )
     initial_parameters = fl.common.ndarrays_to_parameters(params)
     logm.console.log(initial_parameters_log_message)
-
-    # NB : if the initial_parameters had been None
-    # the behaviour would have been : Requesting initial parameters from one random client
-    # Question: add this as a configuration option ?
 
     strategy = strategy_registry()[conf.server_strategy.strategy.name]( 
         model=model,
