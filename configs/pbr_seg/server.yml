@@ -11,9 +11,9 @@ server_compute_context:
         api_key_definition:
           env_var_name: WANDB_API_KEY
         params:
-          project: "your_project_name"
-          group: "your_group_name"
-          name: "your_run_name"
+          project: "Prostate_Bladder_Rectum"
+          group: "federated_${num_clients}_clients"
+          name: "fedavg_${num_clients}_clients_INT_IHU_URITOX_e5_flr100"
           job_type: "server"
           is_client: false
 server_run:
@@ -39,7 +39,7 @@ data:
   config:
     dir_train: None
     dir_val: None
-    dir_test: None
+    dir_test: ${root_dir}/datasets/test_INT_URITOX/
     augment: False
     cache_rate: '1.0'
     shape_img:
