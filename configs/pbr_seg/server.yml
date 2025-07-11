@@ -2,31 +2,44 @@ root_dir: ${oc.env:PWD}
 num_clients: '3'
 server_compute_context:
   hardware:
-    accelerator: auto
-    devices: auto
-  metrics_logger:
-    name: tensorboard
-    config:
-      subdir: /experiments/node
+    accelerator: gpu
+    devices:
+      - 0
+  metrics_loggers:
+    - name: wandb
+      config:
+        api_key_definition:
+          env_var_name: WANDB_API_KEY
+        params:
+          project: "your_project_name"
+          group: "your_group_name"
+          name: "your_run_name"
+          job_type: "server"
+          is_client: false
 server_run:
-  num_rounds: '10'
-  epochs_per_round: '1'
-  logger:
-    name: rich
+  num_rounds: 10
+  epochs_per_round: 1
+  client_configs: []
+  loggers:
+    - name: rich
+      config:
+        empty_configuration: true
+  reporting:
+    add_timestamp_in_path: true
+server_strategy:
+  strategy:
+    name: fedavg
     config:
-      empty_configuration: true
-strategy:
-  name: fedavg
-  config:
-    min_fit_clients: ${num_clients}
-    min_evaluate_clients: ${num_clients}
-    min_available_clients: ${num_clients}
+      min_fit_clients: ${num_clients}
+      min_evaluate_clients: ${num_clients}
+      min_available_clients: ${num_clients}
+  decorators: []
 data:
   name: pbr
   config:
     dir_train: None
     dir_val: None
-    dir_test: ${root_dir}/datasets/test_INT_URITOX/
+    dir_test: None
     augment: False
     cache_rate: '1.0'
     shape_img:
@@ -36,7 +49,7 @@ data:
     batch_size: '1'
     num_workers: '4'
 model:
-  name: pbr
+  name: unet
   config:
     spatial_dims: '3'
     in_channels: '1'

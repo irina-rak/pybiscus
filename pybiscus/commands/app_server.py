@@ -228,12 +228,11 @@ def launch_config(
     _metricslogger_classes.append( _file_metrics_logger_factory )
 
     _metricslogger = MultipleMetricsLoggerFactory(_metricslogger_classes).get_metricslogger(reporting_path)
-
+    
     fabric = Fabric(**conf.server_compute_context.hardware.model_dump(), loggers=[_metricslogger])
     fabric.launch()
 
     # load the model
-    # logm.console.log(f"---- Keys in model_registry: {model_registry().keys()}")
     model_class = model_registry()[conf.model.name]
     _model = model_class(**conf.model.config.model_dump())
 
