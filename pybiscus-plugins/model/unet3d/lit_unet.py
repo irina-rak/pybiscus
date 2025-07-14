@@ -192,7 +192,7 @@ class LitUnet(pl.LightningModule):
             self.log_dict(
                 {f"val_{key}": val for key, val in dice.items()}, prog_bar=True
             )
-        self.log("val_loss", loss, prog_bar=True)
+            
         results = {"loss": loss}
         
         results["dice_avg"] = dice.item()
