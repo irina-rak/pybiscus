@@ -21,7 +21,7 @@ def train_loop(fabric, net, trainloader, optimizer, epochs: int, verbose=False):
                 key: torch.tensor(0.0, device=net.device)
                 for key in net.signature.__required_keys__
             }
-            train_task.description = f"Training... Epoch {epoch + 1}/{epochs}"
+            progress.update(train_task, description=f"Training... Epoch {epoch + 1}/{epochs}")
             # for batch_idx, batch in track(
             #     enumerate(trainloader),
             #     total=len(trainloader),
