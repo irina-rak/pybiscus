@@ -19,6 +19,12 @@ from pybiscus.flower_config.config_server import ConfigServer
 from pybiscus.commands.onnx_mngt import to_onnx_with_datamodule
 from pybiscus.commands.apps_common import load_config
 
+# Set seed for reproducibility
+from monai.utils import set_determinism
+seed = 4294967295
+set_determinism(seed=seed)
+logm.console.log(f"[bold]Setting seed to {seed}.[/bold]")
+
 #                    ------------------------------------------------
 
 def ensure_dir_exists(path):

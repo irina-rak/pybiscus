@@ -19,7 +19,7 @@ def set_params(model: torch.nn.ModuleList, params: list[np.ndarray]):
 
 
 # Accept epochs_per_round as argument
-def fit_config(server_round: int, epochs_per_round: int = 1):
+def fit_config(server_round: int, epochs_per_round: int):
     """Return training configuration dict for each round."""
     config = {
         "server_round": server_round,  # The current round of federated learning

@@ -1,5 +1,5 @@
 import torch
-from rich.progress import track
+from rich.progress import track, Progress
 
 torch.backends.cudnn.enabled = True
 
@@ -14,36 +14,43 @@ def train_loop(fabric, net, trainloader, optimizer, epochs: int, verbose=False):
     elif isinstance(optimizer, list) and len(optimizer) == 1:
         optimizer = optimizer[0]
     
-    for epoch in range(epochs):
-        results_epoch = {
-            key: torch.tensor(0.0, device=net.device)
-            for key in net.signature.__required_keys__
-        }
-        for batch_idx, batch in track(
-            enumerate(trainloader),
-            total=len(trainloader),
-            description="Training...",
-        ):
-            results = net.training_step(batch, batch_idx)
-            loss = results["loss"]
+    with Progress() as progress:
+        train_task = progress.add_task("[cyan]Training...", total=len(trainloader))
+        for epoch in range(epochs):
+            results_epoch = {
+                key: torch.tensor(0.0, device=net.device)
+                for key in net.signature.__required_keys__
+            }
+            train_task.description = f"Training... Epoch {epoch + 1}/{epochs}"
+            # for batch_idx, batch in track(
+            #     enumerate(trainloader),
+            #     total=len(trainloader),
+            #     description="Training...",
+            # ):
+            for batch_idx, batch in enumerate(trainloader):
+                progress.update(train_task, advance=1)
+                results = net.training_step(batch, batch_idx)
+                loss = results["loss"]
 
-            if optimizer is not None:
-                optimizer.zero_grad()
-                fabric.backward(loss)
-                optimizer.step()
+                if optimizer is not None:
+                    optimizer.zero_grad()
+                    fabric.backward(loss)
+                    optimizer.step()
 
-            for key in results_epoch.keys():
-                value = results[key]
+                for key in results_epoch.keys():
+                    value = results[key]
 
-                # hardening code --- begin ---
-                if not isinstance(value, torch.Tensor):
-                    value = torch.tensor(value, device=net.device)
+                    # hardening code --- begin ---
+                    if not isinstance(value, torch.Tensor):
+                        value = torch.tensor(value, device=net.device)
 
-                if value.shape != results_epoch[key].shape:
-                    value = value.reshape(results_epoch[key].shape)
-                # hardening code --- end ---
+                    if value.shape != results_epoch[key].shape:
+                        value = value.reshape(results_epoch[key].shape)
+                    # hardening code --- end ---
 
-                results_epoch[key] += value
+                    results_epoch[key] += value
+                    # Reset the train_task count
+            progress.reset(train_task, total=len(trainloader))
 
         for key in results_epoch.keys():
             results_epoch[key] /= len(trainloader)
