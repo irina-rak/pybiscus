@@ -1,0 +1,7 @@
+# Ignore all files
+*
+# except itself
+!.gitignore
+!client_1.yml
+!client_2.yml
+!server.yml

@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, ClassVar
 
 from pydantic import BaseModel, ConfigDict
@@ -59,7 +60,8 @@ class ConfigServerReporting(BaseModel):
 
     PYBISCUS_CONFIG: ClassVar[str] = "reporting"
 
-    basedir: str = "${root_dir}/experiments"
+    # basedir: str = Path("${root_dir}/experiments")
+    basedir: str = str((Path(__file__).resolve().parent.parent.parent / "experiments"))
     add_timestamp_in_path: bool = True
 
     server_config_filename : str = "config_server.yml"
@@ -126,6 +128,7 @@ class ConfigServer(BaseModel):
     Attributes
     ----------
     root_dir: str      = the path to a "root" directory, relatively to which can be found Data, Experiments and other useful directories
+    num_clients: int   = the number of clients to be used in the FL session.
     logger: str        = the config for the logger.
     strategy           = arguments for the needed Strategy
     fabric             = keywords for the Fabric instance
@@ -136,6 +139,7 @@ class ConfigServer(BaseModel):
     PYBISCUS_ALIAS: ClassVar[str] = "Pybiscus server configuration"
 
     root_dir:               str = "${oc.env:PWD}"
+    num_clients:            int = 2
     flower_server:          ConfigFlowerServer
     server_run:             ConfigServerRun
     server_compute_context: ConfigServerComputeContext

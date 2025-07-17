@@ -19,6 +19,12 @@ from pybiscus.flower_config.config_server import ConfigServer
 from pybiscus.commands.onnx_mngt import to_onnx_with_datamodule
 from pybiscus.commands.apps_common import load_config
 
+# Set seed for reproducibility
+from monai.utils import set_determinism
+seed = 4294967295
+set_determinism(seed=seed)
+logm.console.log(f"[bold]Setting seed to {seed}.[/bold]")
+
 #                    ------------------------------------------------
 
 def ensure_dir_exists(path):
@@ -228,7 +234,7 @@ def launch_config(
     _metricslogger_classes.append( _file_metrics_logger_factory )
 
     _metricslogger = MultipleMetricsLoggerFactory(_metricslogger_classes).get_metricslogger(reporting_path)
-
+    
     fabric = Fabric(**conf.server_compute_context.hardware.model_dump(), loggers=[_metricslogger])
     fabric.launch()
 
@@ -254,14 +260,10 @@ def launch_config(
         initial_parameters_log_message = f"Loaded weights from {weights_path}"
 
     params = torch.nn.ParameterList(
-        [param.detach().cpu().numpy() for param in model.parameters()]
+        [param.detach().cpu().numpy() for _, param in model.state_dict().items()]
     )
     initial_parameters = fl.common.ndarrays_to_parameters(params)
     logm.console.log(initial_parameters_log_message)
-
-    # NB : if the initial_parameters had been None
-    # the behaviour would have been : Requesting initial parameters from one random client
-    # Question: add this as a configuration option ?
 
     strategy = strategy_registry()[conf.server_strategy.strategy.name]( 
         model=model,

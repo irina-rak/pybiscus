@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import ClassVar, Union
+from typing import ClassVar, List, Union
 from pydantic import BaseModel, ConfigDict
 
 class ConfigHardware(BaseModel):
@@ -28,6 +28,6 @@ class ConfigHardware(BaseModel):
 
     # TODO: check devices
     # devices: Union[int, list[int], str] = "auto"
-    devices: Union[int, str] = "auto"
+    devices: Union[int, str, List[int]] = "auto"
 
     model_config = ConfigDict(extra="forbid")

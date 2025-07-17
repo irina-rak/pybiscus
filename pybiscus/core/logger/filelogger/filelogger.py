@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from pybiscus.interfaces.core.logger import LoggerFactory
@@ -18,7 +19,8 @@ class FileLogger():
 
     def __init__(self, log_file_path):
 
-        if log_file_path is str:
+        if isinstance(log_file_path, str):
+            log_file_path = os.path.expandvars(os.path.expanduser(log_file_path))
             log_file_path = Path(log_file_path)
 
         log_file_path.parent.mkdir(parents=True, exist_ok=True)

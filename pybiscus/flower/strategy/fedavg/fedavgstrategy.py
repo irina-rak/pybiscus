@@ -1,4 +1,5 @@
 from collections import defaultdict
+from functools import partial
 from logging import WARNING
 from typing import Callable, Literal, Optional, Union, ClassVar
 
@@ -37,10 +38,11 @@ class ConfigFabricFedAvgStrategyData(BaseModel):
     # fraction_fit: float = 1,
     # fraction_evaluate: float = 1,
     # min_fit_clients: int = 2,
-    # min_evaluate_clients: int = 2,
-    # min_available_clients: int = 2,
 
+    epochs_per_round: int = 1
     min_fit_clients: int = 2
+    min_evaluate_clients: int = 2
+    min_available_clients: int = 2
 
     model_config = ConfigDict(extra="forbid")
 
@@ -219,6 +221,9 @@ class FabricFedAvgStrategyFactory(FabricStrategyFactory):
         self.config=config
 
     def get_strategy(self):
+        # Remove 'epochs_per_round' from config dict before passing to strategy
+        config_dict = self.config.model_dump()
+        epochs_per_round = config_dict.pop('epochs_per_round', 1)
 
         return FabricFedAvgStrategy(
             fit_metrics_aggregation_fn=weighted_average,
@@ -226,8 +231,8 @@ class FabricFedAvgStrategyFactory(FabricStrategyFactory):
             model=self.model,
             fabric=self.fabric,
             evaluate_fn=get_evaluate_fn(testset=self.testset, model=self.model, fabric=self.fabric),
-            on_fit_config_fn=fit_config,
+            on_fit_config_fn=partial(fit_config, epochs_per_round=epochs_per_round),
             on_evaluate_config_fn=evaluate_config,
             initial_parameters=self.initial_parameters,
-            **self.config.model_dump()
+            **config_dict
         )

@@ -9,6 +9,7 @@ data:
       - randomvector
       - turbofan
       - mnist
+      - pbr
 model:
   - path: "./pybiscus-plugins/model"
     modules:
@@ -16,6 +17,7 @@ model:
       - linearregression
       - lstm
       - noop
+      - unet3d
 strategy:
   - path: "./pybiscus-plugins/strategy"
     modules:
