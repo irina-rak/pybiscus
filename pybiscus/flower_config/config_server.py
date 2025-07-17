@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, ClassVar
 
 from pydantic import BaseModel, ConfigDict
@@ -59,7 +60,8 @@ class ConfigServerReporting(BaseModel):
 
     PYBISCUS_CONFIG: ClassVar[str] = "reporting"
 
-    basedir: str = "${root_dir}/experiments"
+    # basedir: str = Path("${root_dir}/experiments")
+    basedir: str = str((Path(__file__).resolve().parent.parent.parent / "experiments"))
     add_timestamp_in_path: bool = True
 
     server_config_filename : str = "config_server.yml"
