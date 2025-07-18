@@ -1,0 +1,72 @@
+root_dir: ${oc.env:PWD}
+
+trainer:
+  max_epochs: 10
+  hardware:
+    accelerator: gpu
+    devices:
+      - 0
+  metrics_loggers:
+    - name: wandb
+      config:
+        api_key_definition:
+          env_var_name: WANDB_API_KEY
+        params:
+          project: "Prostate_Bladder_Rectum"
+          group: "pbr_gen"
+          name: "pbr_gen_local_IHU_e${trainer.max_epochs}"
+          
+          # project: "Decathlon"
+          # group: "Task01_BrainTumour"
+          # name: "BT_gen_local_IHU_e${trainer.max_epochs}"
+
+          job_type: "server"
+          is_client: false
+  reporting_path: ${root_dir}/experiments/local/
+
+data:
+  name: pbr_gen
+  config:
+    dir_train: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/train_split.json
+    dir_val: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/val_split.json
+    dir_test: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/test_split.json
+
+    # dir_train: ${root_dir}/datasets/Task01_BrainTumour
+    # dir_val: ${root_dir}/datasets/Task01_BrainTumour
+    # dir_test: ${root_dir}/datasets/Task01_BrainTumour
+
+    task_type: "generation"  # This will use LDM preprocessing
+    # patch_size: [96, 96, 96]
+    patch_size: [128, 128, 128]
+    augment: False
+    cache_rate: 1.0
+    batch_size: 1
+    num_workers: 8
+
+model:
+  name: klae
+  config:
+    generator_config:
+      spatial_dims: 3
+      in_channels: 1
+      out_channels: 1
+      channels: [32, 64, 64]
+      attention_levels: [False, False, True]
+      latent_channels: 3
+      num_res_blocks: 1
+      norm_num_groups: 32
+    discriminator_config:
+      spatial_dims: 3
+      num_layers_d: 3
+      channels: 32
+      in_channels: 1
+      out_channels: 1
+      kernel_size: 4
+    lr:
+      - 1e-4
+      - 5e-4
+    perceptual_weight: 0.001
+    adversarial_weight: 0.001
+    kl_weight: 1e-6
+    adv_weight: 0.01
+    autoencoder_warm_up_n_epochs: 10
