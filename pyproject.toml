@@ -32,6 +32,7 @@ medical_imaging = [
     "monai>=1.4.0",
     "nibabel>=5.0.0",
     "SimpleITK>=2.1.0",
+    "lpips>=0.1.4",
 ]
 
 [project.scripts]

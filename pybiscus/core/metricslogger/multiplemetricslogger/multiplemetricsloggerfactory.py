@@ -21,4 +21,4 @@ class MultipleMetricsLoggerFactory(MetricsLoggerFactory):
         if nb_loggers == 1:
             return loggers[0]
          
-        return MultipleMetricsLogger(loggers)
+        return MultipleMetricsLogger(loggers, save_dir=reporting_path)

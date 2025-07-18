@@ -10,6 +10,7 @@ data:
       - turbofan
       - mnist
       - pbr
+      - pbr_gen
 model:
   - path: "./pybiscus-plugins/model"
     modules:
@@ -18,6 +19,7 @@ model:
       - lstm
       - noop
       - unet3d
+      - klae
 strategy:
   - path: "./pybiscus-plugins/strategy"
     modules:

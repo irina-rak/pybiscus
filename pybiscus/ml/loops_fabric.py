@@ -14,6 +14,9 @@ def train_loop(fabric, net, trainloader, optimizer, epochs: int, verbose=False):
     elif isinstance(optimizer, list) and len(optimizer) == 1:
         optimizer = optimizer[0]
     
+    # Check if the model uses manual optimization (Lightning GANs, etc.)
+    uses_manual_optimization = hasattr(net, 'automatic_optimization') and not net.automatic_optimization
+    
     with Progress() as progress:
         train_task = progress.add_task("[cyan]Training...", total=len(trainloader))
         for epoch in range(epochs):
@@ -22,17 +25,14 @@ def train_loop(fabric, net, trainloader, optimizer, epochs: int, verbose=False):
                 for key in net.signature.__required_keys__
             }
             progress.update(train_task, description=f"Training... Epoch {epoch + 1}/{epochs}")
-            # for batch_idx, batch in track(
-            #     enumerate(trainloader),
-            #     total=len(trainloader),
-            #     description="Training...",
-            # ):
+            
             for batch_idx, batch in enumerate(trainloader):
                 progress.update(train_task, advance=1)
                 results = net.training_step(batch, batch_idx)
                 loss = results["loss"]
 
-                if optimizer is not None:
+                # Only handle optimization if the model doesn't use manual optimization
+                if not uses_manual_optimization and optimizer is not None:
                     optimizer.zero_grad()
                     fabric.backward(loss)
                     optimizer.step()
