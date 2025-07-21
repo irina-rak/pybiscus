@@ -1,16 +1,13 @@
-from typing import List, Literal, TypedDict
+from typing import List, Literal, TypedDict, Union
 
 import lightning.pytorch as pl
 import torch
 import torch.nn.functional as F
 
-from monai.data import decollate_batch
 from monai.inferers import sliding_window_inference
 from monai.losses import PatchAdversarialLoss, PerceptualLoss
-from monai.metrics import DiceHelper
 from monai.networks.layers import Act
-from monai.networks.nets import AutoencoderKL, DiffusionModelUNet, PatchDiscriminator
-from monai.networks.schedulers import DDPMScheduler
+from monai.networks.nets import AutoencoderKL, PatchDiscriminator
 from monai.utils import set_determinism
 from pydantic import BaseModel, ConfigDict
 from torch.amp import GradScaler, autocast
@@ -130,6 +127,7 @@ class ConfigKLAE(BaseModel):
     kl_weight: float = 1e-6
     adv_weight: float = 0.01
     autoencoder_warm_up_n_epochs: int = 10
+    seed: Union[int, None] = None
     _logging: bool = True
 
     model_config = ConfigDict(extra="forbid")
@@ -192,10 +190,15 @@ class LitKLAutoEncoder(pl.LightningModule):
         kl_weight: float = 1e-6,
         adv_weight: float = 0.01,
         autoencoder_warm_up_n_epochs: int = 10,
+        seed: Union[int, None] = None,
         _logging: bool = True,
     ):
         super().__init__()
         self.save_hyperparameters()
+
+        if seed is not None and type(seed) is int:
+            set_determinism(seed=seed)
+            console.log(f"[bold][yellow]Setting seed to {seed}.[/yellow][/bold]")
 
         # Memory optimization settings
         if torch.cuda.is_available():
@@ -262,78 +265,61 @@ class LitKLAutoEncoder(pl.LightningModule):
 
             recons_loss = F.l1_loss(reconstruction.float(), images.float())
             p_loss = self.perceptual_loss(reconstruction.float(), images.float())
-            adversarial_loss = self.adversarial_loss(logits_fake, target_is_real=True, for_discriminator=False)
+            # adversarial_loss = self.adversarial_loss(logits_fake, target_is_real=True, for_discriminator=False)
 
-            kl_loss = 0.5 * torch.sum(
-                0.5 * torch.sum(z_mu.pow(2) + z_sigma.pow(2) - torch.log(z_sigma.pow(2)) - 1, dim=[1, 2, 3, 4])
-            )
+            # kl_loss = 0.5 * torch.sum(
+            #     0.5 * torch.sum(z_mu.pow(2) + z_sigma.pow(2) - torch.log(z_sigma.pow(2)) - 1, dim=[1, 2, 3, 4])
+            # )
             # kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
-            kl_loss = torch.mean(kl_loss)
+            # kl_loss = torch.mean(kl_loss)
+            kl_loss = self.kl_divergence_loss(z_mu, z_sigma)
 
             # Calculate total generator loss
-            loss_g = recons_loss + (self.kl_weight * kl_loss) + (self.perceptual_weight * p_loss) + (self.adversarial_weight * adversarial_loss)
+            # loss_g = recons_loss + (self.kl_weight * kl_loss) + (self.perceptual_weight * p_loss) + (self.adversarial_weight * adversarial_loss)
+            loss_g = recons_loss + (self.kl_weight * kl_loss) + (self.perceptual_weight * p_loss)
+
+            # Warm-up phase
+            adversarial_loss = torch.tensor(0.0, device=self.device)
+            if self.current_epoch > self.autoencoder_warm_up_n_epochs:
+                logits_fake = self.discriminator(reconstruction.contiguous().detach())[-1]
+                adversarial_loss = self.adversarial_loss(logits_fake, target_is_real=True, for_discriminator=False)
+                loss_g += self.adversarial_weight * adversarial_loss
+
             
         self.manual_backward(loss_g)
         opt_g.step()
 
-        # Discriminator training
-        opt_d.zero_grad(set_to_none=True)
+        discriminator_loss = torch.tensor(0.0, device=self.device)
+        if self.current_epoch > self.autoencoder_warm_up_n_epochs:
+            # Discriminator training
+            opt_d.zero_grad(set_to_none=True)
 
-        with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu', enabled=True):
-            logits_fake = self.discriminator(reconstruction.contiguous().detach())[-1]
-            loss_d_fake = self.adversarial_loss(logits_fake, target_is_real=False, for_discriminator=True)
+            with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu', enabled=True):
+                logits_fake = self.discriminator(reconstruction.contiguous().detach())[-1]
+                loss_d_fake = self.adversarial_loss(logits_fake, target_is_real=False, for_discriminator=True)
 
-            logits_real = self.discriminator(images.contiguous().detach())[-1]
-            loss_d_real = self.adversarial_loss(logits_real, target_is_real=True, for_discriminator=True)
+                logits_real = self.discriminator(images.contiguous().detach())[-1]
+                loss_d_real = self.adversarial_loss(logits_real, target_is_real=True, for_discriminator=True)
 
-            discriminator_loss = (loss_d_fake + loss_d_real) * 0.5
-            loss_d = self.adv_weight * discriminator_loss
+                discriminator_loss = (loss_d_fake + loss_d_real) * 0.5
+                loss_d = self.adv_weight * discriminator_loss
 
-        self.manual_backward(loss_d)
-        opt_d.step()
-
-        # # Train Discriminator (only after warm-up period)
-        # discriminator_loss = torch.tensor(0.0, device=self.device)
-        # if self.current_epoch > self.autoencoder_warm_up_n_epochs:
-        #     opt_d.zero_grad(set_to_none=True)
-            
-        #     # Re-generate reconstruction without gradients for discriminator
-        #     with torch.no_grad():
-        #         reconstruction_detached, _, _ = self.autoencoderkl(images)
-        #         reconstruction_detached = reconstruction_detached.detach()
-            
-        #     with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu', enabled=True):
-        #         # Discriminator loss on fake images
-        #         logits_fake = self.discriminator(reconstruction_detached.contiguous())[-1]
-        #         loss_d_fake = self.adversarial_loss(logits_fake, target_is_real=False, for_discriminator=True)
-                
-        #         # Discriminator loss on real images
-        #         logits_real = self.discriminator(images.contiguous())[-1]
-        #         loss_d_real = self.adversarial_loss(logits_real, target_is_real=True, for_discriminator=True)
-                
-        #         discriminator_loss = (loss_d_fake + loss_d_real) * 0.5
-        #         loss_d = self.adv_weight * discriminator_loss
-
-        #     self.manual_backward(loss_d)
-        #     opt_d.step()
+            self.manual_backward(loss_d)
+            opt_d.step()
 
         if self._logging:
             self.log("train_recons_loss", recons_loss, prog_bar=True)
-            self.log("train_kl_loss", kl_loss, prog_bar=True)
-            self.log("train_perceptual_loss", p_loss, prog_bar=True)
             # if self.current_epoch > self.autoencoder_warm_up_n_epochs:
-            #     self.log("train_gen_loss", generator_loss, prog_bar=True)
-            #     self.log("train_disc_loss", discriminator_loss, prog_bar=True)
-            self.log("train_gen_loss", loss_g, prog_bar=True)
-            self.log("train_disc_loss", loss_d, prog_bar=True)
+            self.log("train_gen_loss", adversarial_loss, prog_bar=True)
+            self.log("train_disc_loss", discriminator_loss, prog_bar=True)
 
         return {
             "loss": recons_loss.detach(),
             "recons_loss": recons_loss.detach(),
             "kl_loss": kl_loss.detach(),
             "perceptual_loss": p_loss.detach(),
-            "gen_loss": loss_g.detach(),
-            "disc_loss": loss_d.detach(),
+            # "gen_loss": loss_g.detach(),
+            # "disc_loss": loss_d.detach(),
         }
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> KLAESignature:
@@ -378,14 +364,31 @@ class LitKLAutoEncoder(pl.LightningModule):
         )
         return [opt_gen, opt_disc]
     
-    def get_scalers(self) -> tuple[GradScaler, GradScaler]:
-        """Get the gradient scalers for mixed precision training.
+    def kl_divergence_loss(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """Calculate the KL divergence loss.
 
-        Returns
-        -------
-        tuple[GradScaler, GradScaler]
-            A tuple containing the scalers for the generator and discriminator.
+        Args:
+        -----
+            mu [torch.Tensor]
+                The mean tensor.
+            logvar [torch.Tensor]
+                The log variance tensor.
+
+        Returns:
+        --------
+            torch.Tensor
+                The KL divergence loss.
         """
-        scaler_gen = GradScaler(enabled=self.trainer.precision == 16)
-        scaler_disc = GradScaler(enabled=self.trainer.precision == 16)
-        return scaler_gen, scaler_disc
+        return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3, 4]).mean()
+    
+    # def get_scalers(self) -> tuple[GradScaler, GradScaler]:
+    #     """Get the gradient scalers for mixed precision training.
+
+    #     Returns
+    #     -------
+    #     tuple[GradScaler, GradScaler]
+    #         A tuple containing the scalers for the generator and discriminator.
+    #     """
+    #     scaler_gen = GradScaler(enabled=self.trainer.precision == 16)
+    #     scaler_disc = GradScaler(enabled=self.trainer.precision == 16)
+    #     return scaler_gen, scaler_disc

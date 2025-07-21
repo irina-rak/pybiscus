@@ -1,7 +1,7 @@
 root_dir: ${oc.env:PWD}
 
 trainer:
-  max_epochs: 10
+  max_epochs: 300 # or 200 if overfitting
   hardware:
     accelerator: gpu
     devices:
@@ -14,7 +14,8 @@ trainer:
         params:
           project: "Prostate_Bladder_Rectum"
           group: "pbr_gen"
-          name: "pbr_gen_local_IHU_e${trainer.max_epochs}"
+          # name: "pbr_gen_local_INT_e${trainer.max_epochs}"
+          name: "pbr_dunet_local_INT_e${trainer.max_epochs}"
           
           # project: "Decathlon"
           # group: "Task01_BrainTumour"
@@ -22,14 +23,14 @@ trainer:
 
           job_type: "server"
           is_client: false
-  reporting_path: ${root_dir}/experiments/local/
+  reporting_path: ${root_dir}/experiments/local/${trainer.metrics_loggers[0].config.params.name}
 
 data:
   name: pbr_gen
   config:
-    dir_train: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/train_split.json
-    dir_val: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/val_split.json
-    dir_test: ${root_dir}/datasets/IHU_Radical_Fixed_Prostate/test_split.json
+    dir_train: ${root_dir}/datasets/INT/train_split.json
+    dir_val: ${root_dir}/datasets/INT/val_split.json
+    dir_test: ${root_dir}/datasets/INT/test_split.json
 
     # dir_train: ${root_dir}/datasets/Task01_BrainTumour
     # dir_val: ${root_dir}/datasets/Task01_BrainTumour
@@ -37,15 +38,58 @@ data:
 
     task_type: "generation"  # This will use LDM preprocessing
     # patch_size: [96, 96, 96]
-    patch_size: [128, 128, 128]
+    patch_size: [96, 96, 96]
     augment: False
     cache_rate: 1.0
     batch_size: 1
     num_workers: 8
 
+# model:
+#   name: klae
+#   config:
+#     generator_config:
+#       spatial_dims: 3
+#       in_channels: 1
+#       out_channels: 1
+#       channels: [32, 64, 64]
+#       attention_levels: [False, False, True]
+#       latent_channels: 3
+#       num_res_blocks: 1
+#       norm_num_groups: 32
+#     discriminator_config:
+#       spatial_dims: 3
+#       num_layers_d: 3
+#       channels: 32
+#       in_channels: 1
+#       out_channels: 1
+#       kernel_size: 4
+#     lr:
+#       - 1e-4
+#       - 5e-4
+#     perceptual_weight: 0.001
+#     adversarial_weight: 0.001
+#     kl_weight: 1e-6
+#     adv_weight: 0.01
+#     autoencoder_warm_up_n_epochs: 30
+#     seed: 4294967295
+
 model:
-  name: klae
+  name: dunet
   config:
+    unet_config:
+      spatial_dims: 3
+      in_channels: 3
+      out_channels: 3
+      channels: [32, 64, 64]
+      attention_levels: [False, True, True]
+      num_res_blocks: 1
+      norm_num_groups: 32
+      num_head_channels: [0, 64, 64]
+    scheduler_config:
+      num_train_timesteps: 1000
+      schedule: "linear_beta"
+      beta_start: 0.0015
+      beta_end: 0.0195
     generator_config:
       spatial_dims: 3
       in_channels: 1
@@ -62,11 +106,6 @@ model:
       in_channels: 1
       out_channels: 1
       kernel_size: 4
-    lr:
-      - 1e-4
-      - 5e-4
-    perceptual_weight: 0.001
-    adversarial_weight: 0.001
-    kl_weight: 1e-6
-    adv_weight: 0.01
-    autoencoder_warm_up_n_epochs: 10
+    autoencoder_weights: ${root_dir}/experiments/local/pbr_gen_local_INT_e300/MultipleMetricsLogger/version_0/checkpoints/epoch=299-step=35847.ckpt
+    lr: 1e-4
+    seed: 4294967295

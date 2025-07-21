@@ -112,7 +112,8 @@ def launch_config(config: Annotated[Path, typer.Argument()] = None):
     data = data_class(**conf.data.config.model_dump())
 
     trainer = Trainer(
-        default_root_dir=Path(conf.root_dir) / "experiments/local/",
+        # default_root_dir=Path(conf.root_dir) / f"experiments/local/",
+        default_root_dir=Path(conf.trainer.reporting_path),
         enable_checkpointing=True,
         logger=_metricslogger,
         max_epochs=conf.trainer.max_epochs,

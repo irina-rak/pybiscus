@@ -20,6 +20,7 @@ model:
       - noop
       - unet3d
       - klae
+      - diffunet
 strategy:
   - path: "./pybiscus-plugins/strategy"
     modules:
