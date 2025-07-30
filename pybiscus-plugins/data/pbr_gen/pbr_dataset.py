@@ -50,15 +50,15 @@ class CTCacheDataset:
         cases = [d for d in listdir(self.data_dir) if path.isdir(self.data_dir / d)]
 
         images = []
-        # labels = []
+        labels = []
         names = []
         for case in cases:
             image_path = str(self.data_dir / case / "CT" / "image.nii.gz")
-            # label_path = str(self.data_dir / case / "Labels" / "combined_labels.nii.gz")
+            label_path = str(self.data_dir / case / "Labels" / "combined_labels.nii.gz")
             if path.exists(image_path):
                 images.append(image_path)
-            # if path.exists(label_path):
-            #     labels.append(label_path)
+            if path.exists(label_path):
+                labels.append(label_path)
             names.append(case)
             
         # data = [{"image": image_name, "label": label_name, "name": name} for image_name, label_name, name in zip(images, labels, names)]

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Literal, TypedDict, Union
+from typing import List, Literal, Sequence, TypedDict, Union
 
 import lightning.pytorch as pl
 import torch
@@ -14,6 +14,7 @@ from torch.amp import autocast
 
 from pybiscus.core.pybiscus_logger import console
 from klae.lit_klae import ConfigKLAutoEncoder, ConfigAlexDiscriminator, LitKLAutoEncoder
+from vqvae.lit_vqvae import ConfigVQAutoEncoder, LitVQVAE
 
 
 class ConfigDiffusionUnet(BaseModel):
@@ -30,13 +31,13 @@ class ConfigDiffusionUnet(BaseModel):
     """
 
     spatial_dims: int
-    in_channels: int
-    out_channels: int
+    in_channels: int # This should match autoencoder's embedding_dim
+    out_channels: int # This should match autoencoder's embedding_dim
     num_res_blocks: int
-    channels: List[int]
-    attention_levels: List[int]
+    channels: Sequence[int]
+    attention_levels: Sequence[int]
     norm_num_groups: int
-    num_head_channels: List[int]
+    num_head_channels: Union[int, Sequence[int]]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -57,7 +58,7 @@ class ConfigScheduler(BaseModel):
     """
 
     num_train_timesteps: int = 1000
-    schedule: Literal["linear_beta", "cosine"] = "linear_beta"
+    schedule: Literal["linear_beta", "scaled_linear_beta", "cosine"] = "linear_beta"
     beta_start: float = 0.0015
     beta_end: float = 0.0195
 
@@ -85,8 +86,7 @@ class ConfigUnet(BaseModel):
 
     unet_config: ConfigDiffusionUnet
     scheduler_config: ConfigScheduler
-    generator_config: ConfigKLAutoEncoder
-    discriminator_config: ConfigAlexDiscriminator
+    generator_config: ConfigVQAutoEncoder
     lr: float = 1e-4
     autoencoder_weights: Union[str, Path]
     seed: Union[int, None] = None
@@ -107,6 +107,7 @@ class ConfigModel_DiffusionUnet(BaseModel):
     """
 
     name: Literal["dunet"]
+    pretrained_weights_path: Union[str, None] = None
     config: ConfigUnet
 
     model_config = ConfigDict(extra="forbid")
@@ -131,8 +132,7 @@ class LitDiffusionUnet(pl.LightningModule):
         self,
         unet_config: ConfigDiffusionUnet,
         scheduler_config: ConfigScheduler,
-        generator_config: ConfigKLAutoEncoder,
-        discriminator_config: ConfigAlexDiscriminator,
+        generator_config: Union[ConfigKLAutoEncoder, ConfigVQAutoEncoder],
         lr: float = 1e-4,
         autoencoder_weights: Union[str, Path] = None,
         seed: Union[int, None] = None,
@@ -143,29 +143,22 @@ class LitDiffusionUnet(pl.LightningModule):
 
         if seed is not None and type(seed) is int:
             set_determinism(seed=seed)
-            console.log(f"[bold][yellow]Setting seed to {seed}.[/yellow][/bold]")
+            console.print(f"[bold][yellow]Setting seed to {seed}.[/yellow][/bold]")
 
-        # Memory optimization settings
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            torch.cuda.empty_cache()
-
-        # Disable automatic optimization for manual control
-        self.automatic_optimization = False
-
-        self.autoencoderkl = LitKLAutoEncoder(
-            # **(generator_config.model_dump() if hasattr(generator_config, "model_dump") else generator_config)
-            generator_config=generator_config,
-            discriminator_config=discriminator_config
+        self.autoencoder = LitVQVAE(
+            vqvae_config=ConfigVQAutoEncoder(**generator_config),
         )
         try:
-            self.autoencoderkl.load_state_dict(torch.load(autoencoder_weights, map_location=self.device)["state_dict"])
+            self.autoencoder.load_state_dict(torch.load(autoencoder_weights, map_location=self.device)["state_dict"])
         except Exception as e:
             console.log(f"[bold][red]Error loading autoencoder weights: {e}[/red][/bold]")
             raise e
-        self.autoencoder = self.autoencoderkl.autoencoderkl
+        self.autoencoder = self.autoencoder.vqvae
         self.autoencoder.eval()  # That way, there's no gradient running around when the diffusion model is trained
+
+        # Explicitly freeze autoencoder parameters to avoid DDP unused parameter warnings
+        for param in self.autoencoder.parameters():
+            param.requires_grad = False
 
         self.model = DiffusionModelUNet(
             **(unet_config.model_dump() if hasattr(unet_config, "model_dump") else unet_config)
@@ -194,54 +187,107 @@ class LitDiffusionUnet(pl.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx) -> DUSignature:
         images = batch["image"]
-
-        optimizer = self.optimizers()
-        optimizer.zero_grad(set_to_none=True)
         
+        with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
+            z = self.autoencoder.encode_stage_2_inputs(
+                images.float()
+            )
+            # Scale the latent representation
+            z = z * self.scaling_factor
+
         if self.current_epoch == 0 and self.global_step == 0:
-            # console.log("[bold][blue]Scaling factor calculation...[/blue][/bold]")
-            with torch.no_grad():
-                with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
-                    self.z = self.autoencoder.encode_stage_2_inputs(
-                        images.float()
-                    )
-                    self.scaling_factor = 1 / torch.std(self.z)
-                    self.inferer.scaling_factor = self.scaling_factor
-            console.log(f"[bold][blue]Scaling factor set to: {self.scaling_factor}[/blue][/bold]")
+            # Better scaling factor calculation
+            self.scaling_factor = 1 / (torch.std(z) + 1e-8)
+
+            # Only clamp if values are genuinely problematic (very extreme)
+            if self.scaling_factor > 10.0 or self.scaling_factor < 0.01:
+                console.print(f"[bold][yellow]Warning: Extreme scaling factor {self.scaling_factor:.4f}, using fallback[/yellow][/bold]")
+                self.scaling_factor = torch.clamp(self.scaling_factor, min=0.01, max=10.0)
+
+            self.inferer.scaling_factor = self.scaling_factor
+            console.print(f"[bold][blue]Scaling factor set to: {self.scaling_factor}[/blue][/bold]")
+            console.print(f"[bold][blue]Latent representation shape: {z.shape}[/blue][/bold]")
+            console.print(f"[bold][blue]Latent mean: {torch.mean(z):.4f}, std: {torch.std(z):.4f}[/blue][/bold]")
 
         with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
-            noise = torch.randn_like(self.z)
+            # Check for NaN in latent representation
+            if torch.isnan(z).any():
+                console.print("[bold][red]NaN detected in latent representation![/red][/bold]")
+                return {"loss": torch.tensor(0.0, device=self.device, requires_grad=True)}
 
+            noise = torch.randn_like(z)
+            
+            # Use more diverse timestep sampling
             timesteps = torch.randint(
                 0, self.inferer.scheduler.num_train_timesteps, (images.shape[0],), device=images.device
             ).long()
 
-            noise_pred = self.inferer(
-                inputs=images,
-                autoencoder_model=self.autoencoder,
-                diffusion_model=self.model,
-                noise=noise,
-                timesteps=timesteps
+            # Add noise to latent representation
+            noisy_latents = self.inferer.scheduler.add_noise(z, noise, timesteps)
+
+            # Predict the noise
+            noise_pred = self.model(
+                noisy_latents,
+                timesteps
             )
 
-            loss = F.mse_loss(noise_pred.float(), noise.float())
+            # Check for NaN in predictions
+            if torch.isnan(noise_pred).any():
+                console.print("[bold][red]NaN detected in noise prediction![/red][/bold]")
+                return {"loss": torch.tensor(0.0, device=self.device, requires_grad=True)}
 
-        self.manual_backward(loss)
-        optimizer.step()
+            if self.global_step < 1000:  # Warm-up phase
+                loss = F.mse_loss(noise_pred.float(), noise.float())
+            else:
+                # Huber loss for better stability
+                loss = F.smooth_l1_loss(noise_pred.float(), noise.float())
 
         if self._logging:
             self.log("train_loss", loss, prog_bar=True)
+            self.log("lr", self.lr_schedulers().get_last_lr()[0], prog_bar=True, sync_dist=True)
+            
+            # Log additional metrics
+            self.log("noise_pred_mean", torch.mean(noise_pred), prog_bar=False, sync_dist=True)
+            self.log("noise_pred_std", torch.std(noise_pred), prog_bar=False, sync_dist=True)
+            self.log("target_noise_mean", torch.mean(noise), prog_bar=False, sync_dist=True)
+            self.log("target_noise_std", torch.std(noise), prog_bar=False, sync_dist=True)
 
-        return {"loss": loss.detach()}
+        return {"loss": loss}
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> DUSignature:
-        pass
+        with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
+            with torch.no_grad():
+                images = batch["image"]
+
+                z = self.autoencoder.encode_stage_2_inputs(
+                    images.float()
+                )
+
+                noise = torch.randn_like(z)
+                timesteps = torch.randint(
+                    0, self.inferer.scheduler.num_train_timesteps, (images.shape[0],), device=images.device
+                ).long()
+
+                noise_pred = self.inferer(
+                    inputs=images,
+                    autoencoder_model=self.autoencoder,
+                    diffusion_model=self.model,
+                    noise=noise,
+                    timesteps=timesteps
+                )
+
+                loss = F.mse_loss(noise_pred.float(), noise.float())
+
+        if self._logging:
+            self.log("val_loss", loss, prog_bar=True)
+
+        return {"loss": loss}
 
     def test_step(self, batch: torch.Tensor, batch_idx: int) -> DUSignature:
         # with torch.no_grad():
         #     images = batch["image"]
             
-        #     reconstruction, _, _ = self.autoencoderkl(images)
+        #     reconstruction, _, _ = self.autoencoder(images)
         #     recons_loss = F.l1_loss(reconstruction.float(), images.float())
                 
         # if self._logging:
@@ -253,11 +299,54 @@ class LitDiffusionUnet(pl.LightningModule):
         pass
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Configure the optimizers for the generator and discriminator.
+        """Configure the optimizers with learning rate scheduling.
 
         Returns
         -------
-        torch.optim.Optimizer
-            The optimizer for the model.
+        dict
+            Dictionary containing optimizer and scheduler configuration.
         """
-        return torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        # Try AdamW with better hyperparameters for diffusion models
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(), 
+            lr=self.lr,
+            betas=(0.9, 0.999),
+            weight_decay=1e-6,
+            eps=1e-8
+        )
+        
+        # Use cosine annealing with warm restarts
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=50,  # Restart every 50 epochs
+            T_mult=2,  # Double the restart period each time
+            eta_min=1e-7
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+            },
+            # Add gradient clipping - crucial for diffusion models
+            "gradient_clip_val": 1.0,
+            "gradient_clip_algorithm": "norm",
+        }
+    
+    # def on_train_epoch_end(self) -> None:
+    #     """Hook called at the end of each training epoch."""
+    #     scheduler = self.lr_schedulers()
+
+    #     if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+    #         # Update the scheduler with the latest validation loss
+    #         val_loss = self.trainer.callback_metrics.get("val_loss", None)
+    #         if val_loss is not None:
+    #             scheduler.step(val_loss.item())
+
+    #     elif isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingWarmRestarts):
+    #         # Step the scheduler at the end of each epoch
+    #         scheduler.step()
+
+    #     self.log("learning_rate", self.optimizers().param_groups[0]['lr'], prog_bar=True, sync_dist=True)

@@ -1,6 +1,8 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, ClassVar
 
+import torch.multiprocessing
 import typer
 import pybiscus.core.pybiscus_logger as logm
 from lightning.pytorch import Trainer
@@ -15,7 +17,15 @@ from pybiscus.core.metricslogger.multiplemetricslogger.multiplemetricsloggerfact
 from pybiscus.flower_config.config_hardware import ConfigHardware
 from pybiscus.plugin.registries import datamodule_registry, metricslogger_registry, model_registry, MetricsLoggerConfig, ModelConfig, DataConfig
 
+torch.multiprocessing.set_sharing_strategy("file_system")
+
 app = typer.Typer(pretty_exceptions_show_locals=False, rich_markup_mode="rich")
+
+OmegaConf.register_new_resolver(
+    "now",
+    lambda pattern: datetime.now().strftime(pattern),
+    replace=True
+)
 
 
 class ConfigTrainerComputeContext(BaseModel):
@@ -23,7 +33,13 @@ class ConfigTrainerComputeContext(BaseModel):
     PYBISCUS_CONFIG: ClassVar[str] = "trainer"
 
     max_epochs: int
+
+    accumulate_grad_batches: int = 1
+    check_val_every_n_epoch: int = 1
+    log_every_n_steps: int = 50
+
     hardware: ConfigHardware
+    
     metrics_loggers: list[MetricsLoggerConfig()] # pyright: ignore[reportInvalidTypeForm]
     reporting_path: Path
 
@@ -90,6 +106,7 @@ def launch_config(config: Annotated[Path, typer.Argument()] = None):
     # handling mandatory config path parameter
 
     conf_loaded = load_config(config)
+    conf_loaded = OmegaConf.to_container(conf_loaded, resolve=True)
 
     conf = check_and_build_trainer_config(conf_loaded)
 
@@ -100,11 +117,25 @@ def launch_config(config: Annotated[Path, typer.Argument()] = None):
     _metricslogger = MultipleMetricsLoggerFactory(_metricslogger_classes).get_metricslogger(conf.trainer.reporting_path)
 
     # Model
-    # model = model_registry()[conf["model"]["name"]](
-    #     **conf["model"]["config"], _logging=True
-    # )
     model_class = model_registry()[conf.model.name]
     model = model_class(**conf.model.config.model_dump())
+
+    # Load the model weights if provided
+    if getattr(conf.model, 'pretrained_weights_path', None) is not None:
+        weights_path = Path(conf.model.pretrained_weights_path)
+        if not weights_path.exists():
+            logm.console.print(f"[red]Weights path {weights_path} does not exist.[/red]")
+            raise typer.Abort()
+        logm.console.print(f"[blue]Loading model weights from {weights_path}...[/blue]")
+        try:
+            # State dict is in 'state_dict' key for Lightning models
+            model.load_state_dict(
+                torch.load(weights_path, map_location="cpu")["state_dict"],
+                strict=True  # allow missing keys in the state dict
+            )
+        except Exception as e:
+            logm.console.print(f"[red]Error loading model weights: {e}[/red]")
+            raise typer.Abort()
 
     # Data
     # data = datamodule_registry()[conf_loaded["data"]["name"]](**conf_loaded["data"]["config"])
@@ -117,6 +148,9 @@ def launch_config(config: Annotated[Path, typer.Argument()] = None):
         enable_checkpointing=True,
         logger=_metricslogger,
         max_epochs=conf.trainer.max_epochs,
+        accumulate_grad_batches=conf.trainer.accumulate_grad_batches,
+        check_val_every_n_epoch=conf.trainer.check_val_every_n_epoch,
+        log_every_n_steps=conf.trainer.log_every_n_steps,
         callbacks=[
             RichModelSummary(),
             RichProgressBar(theme=RichProgressBarTheme(metrics="blue")),

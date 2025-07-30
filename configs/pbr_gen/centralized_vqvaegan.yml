@@ -1,0 +1,93 @@
+root_dir: ${oc.env:PWD}
+
+trainer:
+  max_epochs: 100
+  # accumulate_grad_batches: 4  # Not supported with manual optimization
+  check_val_every_n_epoch: 1  # Validate every n epochs to save time
+  log_every_n_steps: 10  # Log more frequently for monitoring
+  hardware:
+    precision: 16-mixed
+    accelerator: gpu
+    strategy: ddp_find_unused_parameters_true
+    devices:
+      - 0
+      - 1
+      - 2
+      - 3
+  metrics_loggers:
+    - name: wandb
+      config:
+        api_key_definition:
+          env_var_name: WANDB_API_KEY
+        params:
+          project: "Prostate_Bladder_Rectum"
+          group: "pbr_gen_${model.name}"
+          name: "pbr_${model.name}_local_INT_URY_e${trainer.max_epochs}_roi_${data.config.patch_size[0]}_${now:%Y%m%d_%H%M}"
+          
+          # project: "Decathlon"
+          # group: "Task01_BrainTumour"
+          # name: "BT_${model.name}_local_e${trainer.max_epochs}_${now:%Y%m%d_%H%M%S}"
+
+          job_type: "server"
+          is_client: false
+  reporting_path: ${root_dir}/experiments/${trainer.metrics_loggers[0].config.params.group}/${trainer.metrics_loggers[0].config.params.name}
+
+data:
+  name: pbr_gen
+  config:
+    dir_train: ${root_dir}/datasets/INT_URY/train_split.json
+    dir_val: ${root_dir}/datasets/INT_URY/val_split.json
+    dir_test: None
+
+    # dir_train: ${root_dir}/datasets/
+    # dir_val: ${root_dir}/datasets/
+    # dir_test: ${root_dir}/datasets/
+
+    task_type: "generation"  # This will use LDM preprocessing
+    # patch_size: [96, 96, 96]
+    # patch_size: [128, 96, 128]
+    patch_size: [192, 192, 128]
+    spacing: [1.0, 1.0, 2.0]
+    # spacing: [2.0, 2.0, 3.0]
+    margin: 10
+    augment: True  # Enable augmentation for better generalization
+    cache_rate: 0.0
+    batch_size: 1
+    num_workers: 8
+
+model:
+  name: vqvaegan
+  # pretrained_weights_path: ${root_dir}/experiments/pbr_gen_vqvae/pbr_vqvae_local_INT_URY_e100_roi_192_20250729_0008_transfer/MultipleMetricsLogger/version_0/checkpoints/pbr_vqvae_local_INT_URY_e100_roi_192_20250729_0008_transfer.ckpt
+  config:
+    vqvae_config:
+      spatial_dims: 3
+      in_channels: 1
+      out_channels: 1
+      channels: [96, 96, 192]
+      num_res_layers: 3
+      num_res_channels: [96, 96, 192]
+      # downsample_parameters:
+      #   - [2, 4, 1, 1]
+      #   - [2, 4, 1, 1]
+      #   - [2, 4, 1, 1]
+      # upsample_parameters:
+      #   - [2, 4, 1, 1, 0]
+      #   - [2, 4, 1, 1, 0]
+      #   - [2, 4, 1, 1, 0]
+      num_embeddings: 32
+      embedding_dim: 64
+      use_checkpointing: True
+    discriminator_config:
+      spatial_dims: 3
+      num_layers_d: 3
+      channels: 32
+      in_channels: ${model.config.vqvae_config.in_channels}
+      out_channels: ${model.config.vqvae_config.out_channels}
+      kernel_size: 4
+    reconstruction_weight: 1.0
+    adv_weight: 0.01
+    perceptual_weight: 0.001
+    jukebox_weight: 1.0
+    lr: [1e-4, 1e-4]
+    autoencoder_warm_up_n_epochs: 10  # Usually n_epochs // 10
+    seed: 4294967295

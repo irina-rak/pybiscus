@@ -47,3 +47,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["pybiscus"]
 
+[dependency-groups]
+test = [
+    "pytest>=8.4.1",
+    "pytest-xdist>=3.8.0",
+]
+

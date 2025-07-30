@@ -19,12 +19,23 @@ class ConfigHardware(BaseModel):
 
     PYBISCUS_CONFIG: ClassVar[str] = "hardware"
 
+    precision: str = "32-true"  # Options: "16-mixed", "32-true", "64-true"
+
     class Accelerator(str, Enum):
         cpu  = "cpu"
         gpu  = "gpu"
         auto = "auto"
 
     accelerator: Accelerator = "auto"
+
+    class Strategy(str, Enum):
+        ddp = "ddp"
+        ddp_find_unused_parameters_true = "ddp_find_unused_parameters_true"
+        deepspeed = "deepspeed"
+        fsdp = "fsdp"
+        auto = "auto"
+
+    strategy: Strategy = "auto"
 
     # TODO: check devices
     # devices: Union[int, list[int], str] = "auto"
