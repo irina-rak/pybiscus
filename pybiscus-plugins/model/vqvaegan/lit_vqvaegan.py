@@ -1,4 +1,4 @@
-from typing import List, Literal, Sequence, Tuple, TypedDict, Union
+from typing import List, Literal, Optional, Sequence, Tuple, TypedDict, Union
 
 import lightning.pytorch as pl
 import torch
@@ -9,7 +9,6 @@ from monai.networks.layers import Act
 from monai.networks.nets import PatchDiscriminator, VQVAE
 from monai.utils import set_determinism
 from pydantic import BaseModel, ConfigDict
-from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
 
 from pybiscus.core.pybiscus_logger import console
@@ -107,8 +106,10 @@ class ConfigVQVAEGAN(BaseModel):
     autoencoder_warm_up_n_epochs: int = 10 # Usually n_epochs // 10
 
     lr: List[float] = [3e-4, 5e-4]  # [generator_lr, discriminator_lr]
+    manual_accumulate_grad_batches: int = 4  # Manual gradient accumulation steps
 
     seed: Union[int, None] = None
+    compile_model: bool = False  # Whether to compile the model for performance
     _logging: bool = True
 
     model_config = ConfigDict(extra="forbid")
@@ -143,18 +144,21 @@ class VQVAEGAN_Signature(TypedDict):
     ----------
     recons_loss: torch.Tensor
         Reconstruction loss, typically L1 loss between input and output images
+    perceptual_loss: torch.Tensor
+        Perceptual loss, which measures the difference between the input and output images in a perceptually meaningful way
     quantization_loss: torch.Tensor
         Quantization loss, which measures the difference between the input and the quantized output
-    loss: torch.Tensor
-        Combined loss, which is the sum of the reconstruction and the quantization losses
-    # fid_score: torch.Tensor
-    #     Frechet Inception Distance (FID) calculates the distance between the distribution of generated images and real images.
+    adversarial_loss: torch.Tensor
+        Adversarial loss, which measures how well the generator fools the discriminator
+    discriminator_loss: Optional[torch.Tensor]
+        Discriminator loss, which measures how well the discriminator distinguishes between real and fake images
     """
 
     recons_loss: torch.Tensor
+    perceptual_loss: torch.Tensor
     quantization_loss: torch.Tensor
-    loss: torch.Tensor
-    # fid_score: torch.Tensor
+    adversarial_loss: torch.Tensor
+    discriminator_loss: Optional[torch.Tensor]
 
 
 class LitVQVAEGAN(pl.LightningModule):
@@ -168,7 +172,9 @@ class LitVQVAEGAN(pl.LightningModule):
         jukebox_weight: float = 1.0,
         autoencoder_warm_up_n_epochs: int = 10,  # Usually n_epochs // 10
         lr: List[float] = [3e-4, 5e-4],
+        manual_accumulate_grad_batches: int = 4,
         seed: Union[int, None] = None,
+        compile_model: bool = False,
         _logging: bool = True,
     ):
         super().__init__()
@@ -183,17 +189,27 @@ class LitVQVAEGAN(pl.LightningModule):
 
         # Initialize the generator
         self.vqvae = VQVAE(
-            **(vqvae_config.model_dump() if hasattr(vqvae_config, "model_dump") else vqvae_config)
+            **(vqvae_config.model_dump() if hasattr(vqvae_config, "model_dump") else vqvae_config),
         )
         
         # Initialize the discriminator
         self.discriminator = PatchDiscriminator(
-            **(discriminator_config.model_dump() if hasattr(discriminator_config, 'model_dump') else discriminator_config),
+            **(discriminator_config.model_dump() if hasattr(discriminator_config, "model_dump") else discriminator_config),
             activation=(Act.LEAKYRELU, {"negative_slope": 0.2}),
             norm="BATCH",
             bias=False,
             padding=1,
         )
+
+        # Compile models if requested
+        if compile_model:
+            console.log("[bold][blue]Compiling VQVAE and Discriminator for optimized performance...[/blue][/bold]")
+            try:
+                self.vqvae = torch.compile(self.vqvae, mode="default")
+                self.discriminator = torch.compile(self.discriminator, mode="default")
+                console.log("[bold][green]Models compiled successfully![/green][/bold]")
+            except Exception as e:
+                console.log(f"[bold][yellow]Model compilation failed, continuing without: {e}[/yellow][/bold]")
         
         # Loss functions
         self.l1_loss = L1Loss()
@@ -203,14 +219,14 @@ class LitVQVAEGAN(pl.LightningModule):
         )
 
         self.perceptual_loss = PerceptualLoss(
-            spatial_dims=vqvae_config.spatial_dims if hasattr(vqvae_config, 'spatial_dims') else vqvae_config['spatial_dims'],
+            spatial_dims=vqvae_config.spatial_dims if hasattr(vqvae_config, "spatial_dims") else vqvae_config["spatial_dims"],
             network_type="alex",
             is_fake_3d=True,
             fake_3d_ratio=0.2,
         )
 
         self.jukebox_loss = JukeboxLoss(
-            spatial_dims=vqvae_config.spatial_dims if hasattr(vqvae_config, "spatial_dims") else vqvae_config['spatial_dims']
+            spatial_dims=vqvae_config.spatial_dims if hasattr(vqvae_config, "spatial_dims") else vqvae_config["spatial_dims"]
         )
 
         # Set weights
@@ -222,11 +238,13 @@ class LitVQVAEGAN(pl.LightningModule):
         self.autoencoder_warm_up_n_epochs = autoencoder_warm_up_n_epochs
         
         self.lr = lr
+        self.manual_accumulate_grad_batches = manual_accumulate_grad_batches
+        self.compile_model = compile_model
         self._logging = _logging
         self._signature = VQVAEGAN_Signature
 
-        self.optimizer_gen, self.optimizer_disc = self.configure_optimizers()
-        self.scheduler_gen, self.scheduler_disc = self.configure_schedulers()
+        # self.optimizer_gen, self.optimizer_disc = self.configure_optimizers()
+        # self.scheduler_gen, self.scheduler_disc = self.configure_schedulers()
 
     @property
     def signature(self):
@@ -239,13 +257,19 @@ class LitVQVAEGAN(pl.LightningModule):
         images = batch["image"]
 
         # Get optimizers
-        opt_g, opt_d = self.optimizer_gen, self.optimizer_disc
+        # opt_g, opt_d = self.optimizer_gen, self.optimizer_disc
+        opt_g, opt_d = self.optimizers()
         
         # Get gradient scalers for mixed precision
-        scaler = self.trainer.precision_plugin.scaler if hasattr(self.trainer.precision_plugin, 'scaler') else None
+        scaler = self.trainer.precision_plugin.scaler if hasattr(self.trainer.precision_plugin, "scaler") else None
+
+        # Gradient accumulation
+        is_accumulate_grad_batches = (batch_idx + 1) % self.manual_accumulate_grad_batches != 0
 
         # Generator training
-        opt_g.zero_grad(set_to_none=True)
+        # Only zero gradients when we're about to step the optimizer
+        if not is_accumulate_grad_batches:
+            opt_g.zero_grad(set_to_none=True)
 
         # with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
         reconstruction, quantization_loss = self.vqvae(images)
@@ -274,20 +298,28 @@ class LitVQVAEGAN(pl.LightningModule):
             adversarial_loss = self.adversarial_loss(logits_fake, target_is_real=True, for_discriminator=False)
             loss_g += self.adv_weight * adversarial_loss
 
+        # Scale loss by accumulation steps for proper averaging
+        loss_g = loss_g / self.manual_accumulate_grad_batches
+
         # Scale and backward
         if scaler:
             scaler.scale(loss_g).backward()
-            scaler.step(opt_g)
-            scaler.update()
+            # Only step when accumulation is complete
+            if not is_accumulate_grad_batches:
+                scaler.step(opt_g)
+                scaler.update()
         else:
             self.manual_backward(loss_g)
-            opt_g.step()
+            # Only step when accumulation is complete
+            if not is_accumulate_grad_batches:
+                opt_g.step()
 
         # Discriminator training
         discriminator_loss = torch.tensor(0.0, device=self.device)
         if self.current_epoch > self.autoencoder_warm_up_n_epochs:
-            # Discriminator training
-            opt_d.zero_grad(set_to_none=True)
+            # Only zero gradients when we're about to step the optimizer
+            if not is_accumulate_grad_batches:
+                opt_d.zero_grad(set_to_none=True)
 
             # with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu', enabled=True):
             logits_fake = self.discriminator(reconstruction.contiguous().detach())[-1]
@@ -299,10 +331,13 @@ class LitVQVAEGAN(pl.LightningModule):
             discriminator_loss = (loss_d_fake + loss_d_real) * 0.5
             loss_d = self.adv_weight * discriminator_loss
 
+            loss_d = loss_d / self.manual_accumulate_grad_batches
+
             self.manual_backward(loss_d)
-            if self.trainer.precision == 16:
-                torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
-            opt_d.step()
+            if not is_accumulate_grad_batches:
+                if self.trainer.precision == 16:
+                    torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                opt_d.step()
         
         if self._logging:
             self.log("train_recons_loss", recons_loss, prog_bar=True, sync_dist=True)
@@ -311,9 +346,11 @@ class LitVQVAEGAN(pl.LightningModule):
             self.log("train_disc_loss", discriminator_loss, prog_bar=True, sync_dist=True)
 
         return {
-            "loss": recons_loss.detach(),
             "recons_loss": recons_loss.detach(),
             "perceptual_loss": p_loss.detach(),
+            "quantization_loss": quantization_loss.detach(),
+            "adv_loss": adversarial_loss.detach(),
+            "disc_loss": discriminator_loss.detach(),
         }
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> VQVAEGAN_Signature:
@@ -331,7 +368,7 @@ class LitVQVAEGAN(pl.LightningModule):
                 + (self.jukebox_weight * j_loss)
             )
 
-            adversarial_loss = torch.tensor(0.0, device=self.device)
+            adversarial_loss = torch.tensor(1.0, device=self.device)
             if self.current_epoch > self.autoencoder_warm_up_n_epochs:
                 # with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu', enabled=True):
                 logits_fake = self.discriminator(reconstruction.contiguous().detach())[-1]
@@ -342,11 +379,14 @@ class LitVQVAEGAN(pl.LightningModule):
         if self._logging:
             self.log("val_recons_loss", recons_loss, prog_bar=True, sync_dist=True)
             self.log("val_quantization_loss", quantization_loss, prog_bar=True, sync_dist=True)
+            self.log("val_adv_loss", adversarial_loss, prog_bar=True, sync_dist=True)
             self.log("val_loss", loss, prog_bar=True, sync_dist=True)
 
         return {
-            "loss": recons_loss.detach(),
             "recons_loss": recons_loss.detach(),
+            "perceptual_loss": p_loss.detach(),
+            "quantization_loss": quantization_loss.detach(),
+            "adv_loss": adversarial_loss.detach(),
         }
 
     def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
@@ -360,35 +400,95 @@ class LitVQVAEGAN(pl.LightningModule):
         opt_disc = torch.optim.AdamW(
             self.discriminator.parameters(), lr=self.lr[1], betas=(0.9, 0.999)
         )
-        
-        return [opt_gen, opt_disc]
-    
-    def configure_schedulers(self):
-        """Configure schedulers for the optimizers."""
-        scheduler_gen = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer_gen, mode="min", factor=0.7, patience=10, verbose=True
+
+        # scheduler_gen = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #     opt_gen, mode="min", factor=0.7, patience=10
+        # )
+        scheduler_gen = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            opt_gen,
+            T_0=30,  # Restart every 30 epochs
+            T_mult=2,  # Double the restart period each time
+            eta_min=1e-7
         )
         scheduler_disc = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer_disc, mode="min", factor=0.7, patience=10, verbose=True
+            opt_disc, mode="min", factor=0.7, patience=10
         )
         
-        return [scheduler_gen, scheduler_disc]
+        # return [opt_gen, opt_disc]
+        return [
+            {
+                "optimizer": opt_gen,
+                "lr_scheduler": {
+                    "scheduler": scheduler_gen,
+                    "interval": "epoch",
+                    "frequency": 1,
+                    # "monitor": "val_loss",
+                }
+            },
+            {
+                "optimizer": opt_disc,
+                "lr_scheduler": {
+                    "scheduler": scheduler_disc,
+                    "interval": "epoch",
+                    "frequency": 1,
+                    "monitor": "val_loss",
+                }
+            }
+        ]
     
-    def on_before_optimizer_step(self, optimizer):
-        # Clip gradients
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+    # def configure_schedulers(self):
+    #     """Configure schedulers for the optimizers."""
+
+    #     # Get optimizers
+    #     optimizer_gen, optimizer_disc = self.optimizers()
+
+    #     scheduler_gen = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #         optimizer_gen, mode="min", factor=0.7, patience=10
+    #     )
+    #     scheduler_disc = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #         optimizer_disc, mode="min", factor=0.7, patience=10
+    #     )
+        
+    #     return [scheduler_gen, scheduler_disc]
 
     def on_validation_epoch_end(self) -> None:
         """Handle scheduler stepping after validation."""
+        # # Debug: Print available metrics
+        # available_metrics = list(self.trainer.callback_metrics.keys())
+        # console.log(f"[blue]Available metrics: {available_metrics}[/blue]")
+        
+        # # Print specific metric values
+        # for metric in ["val_loss", "val_adv_loss", "val_recons_loss"]:
+        #     value = self.trainer.callback_metrics.get(metric, None)
+        #     if value is not None:
+        #         console.log(f"[green]{metric}: {value:.4f}[/green]")
+        #     else:
+        #         console.log(f"[red]{metric}: Not found[/red]")
+
+        optimizer_gen, optimizer_disc = self.optimizers()
+
+        if not optimizer_gen or not optimizer_disc:
+            console.log("[bold][red]Optimizers not found, cannot step schedulers.[/red][/bold]")
+            return
+        
+        scheduler_gen, scheduler_disc = self.lr_schedulers()
+
+        scheduler_gen.step()
+        
         # Get validation loss and step schedulers
         val_loss = self.trainer.callback_metrics.get("val_loss", None)
         if val_loss is not None:
-            self.scheduler_gen.step(val_loss)
-            self.scheduler_disc.step(val_loss)
-            
+            # scheduler_gen.step(val_loss)
+            scheduler_disc.step(val_loss)
+
             if self._logging:
-                self.log("lr_g", self.scheduler_gen.optimizer.param_groups[0]["lr"], prog_bar=True, sync_dist=True)
-                self.log("lr_d", self.scheduler_disc.optimizer.param_groups[0]["lr"], prog_bar=True, sync_dist=True)
+                self.log("lr_g", self.optimizers()[0].param_groups[0]["lr"], prog_bar=True, sync_dist=True)
+                self.log("lr_d", self.optimizers()[1].param_groups[0]["lr"], prog_bar=True, sync_dist=True)
+
+            console.log(
+                f"[bold][blue]Stepping schedulers: lr_g={scheduler_gen.optimizer.param_groups[0]['lr']:.6f}, "
+                f"lr_d={scheduler_disc.optimizer.param_groups[0]['lr']:.6f}[/blue][/bold]"
+            )
 
     
     # def get_scalers(self) -> tuple[GradScaler, GradScaler]:
