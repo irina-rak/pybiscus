@@ -10,7 +10,7 @@ dependencies = [
     "flask-cors>=5.0.1",
     "flask>=3.1.0",
     "flwr>=1.7.0",
-    "lightning[pytorch-extra]>=2.4.0",
+    "lightning[pytorch-extra]>=2.5.2",
     "pandas>=2.2.3",
     "pydantic>=2.10.4",
     "pyyaml>=6.0.2",
@@ -23,13 +23,14 @@ dependencies = [
     "pillow>=11.0.0",
     "onnx>=1.18.0",
     "dotenv>=0.9.9",
+    "rich==14.0.0",
 ]
 
 # Optional dependencies (medical imaging)
 
 [project.optional-dependencies]
 medical_imaging = [
-    "monai>=1.4.0",
+    "monai>=1.5.0",
     "nibabel>=5.0.0",
     "SimpleITK>=2.1.0",
     "lpips>=0.1.4",

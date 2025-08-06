@@ -186,21 +186,20 @@ def get_transforms_ldm(
         #     method="symmetric",
         # ),
 
-        # RandSpatialCropSamplesd(
-        #     keys=["image"],
-        #     roi_size=patch_size,
-        #     num_samples=2,  # 2 patches per image = ~400 total samples
-        #     random_size=False
-        # ),
+        RandSpatialCropSamplesd(
+            keys=["image"],
+            roi_size=patch_size,
+            num_samples=2,  # 2 patches per image = ~400 total samples
+            random_size=False
+        ),
 
-        # SpatialPadd(
-        #     keys=["image"],
-        #     spatial_size=patch_size,
-        #     method="symmetric",
-        #     mode=("constant")
-        # ),
-
-        CenterSpatialCropd(keys=["image"], roi_size=patch_size),
+        # CenterSpatialCropd(keys=["image"], roi_size=patch_size),
+        SpatialPadd(
+            keys=["image"],
+            spatial_size=patch_size,
+            method="symmetric",
+            mode=("constant")
+        ),
 
         # RandSpatialCropd( # Use this with ResizeWithPadOrCropd when setting batch size > 1, otherwise a size mismatch occurs
         #     keys=["image"],
@@ -220,8 +219,8 @@ def get_transforms_ldm(
     train_transforms = Compose(
         common_preprocessing
         + [
-            # RandFlipd(keys=["image"], spatial_axis=0, prob=0.3),
-            # RandFlipd(keys=["image"], spatial_axis=1, prob=0.3),
+            RandFlipd(keys=["image"], spatial_axis=0, prob=0.3),
+            RandFlipd(keys=["image"], spatial_axis=1, prob=0.3),
             # RandRotate90d(keys=["image"], prob=0.1, max_k=1),
             RandAffined(
                 keys=["image"],
@@ -230,15 +229,15 @@ def get_transforms_ldm(
                 scale_range=(0.1, 0.1, 0.1),
                 mode=("bilinear")
             ),
-            # Rand3DElasticd(
-            #     keys=["image"],
-            #     sigma_range=(5, 8),
-            #     magnitude_range=(50, 150),
-            #     prob=0.3,
-            #     mode=("bilinear"),
-            #     spatial_size=patch_size,
-            #     padding_mode="zeros"
-            # ),
+            Rand3DElasticd(
+                keys=["image"],
+                sigma_range=(5, 8),
+                magnitude_range=(50, 150),
+                prob=0.2,
+                mode=("bilinear"),
+                spatial_size=patch_size,
+                padding_mode="zeros"
+            ),
             # RandGaussianNoised(keys=["image"], prob=0.15, mean=0.0, std=0.005),
             # RandScaleIntensityd(keys=["image"], factors=0.05, prob=0.2),
             # RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.5),
@@ -453,6 +452,7 @@ class PBRLitDataModule(pl.LightningDataModule):
             shuffle=True,
             # collate_fn=self.collate_fn,
             # collate_fn=self.list_data_collate,
+            persistent_workers=True,  # Keep workers alive for faster training
         )
 
     def val_dataloader(self):
@@ -464,6 +464,7 @@ class PBRLitDataModule(pl.LightningDataModule):
             shuffle=False,
             # collate_fn=self.collate_fn,
             # collate_fn=self.list_data_collate,
+            persistent_workers=True,
         )
 
     def test_dataloader(self):

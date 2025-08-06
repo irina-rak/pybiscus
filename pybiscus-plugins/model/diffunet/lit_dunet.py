@@ -14,7 +14,7 @@ from torch.amp import autocast
 
 from pybiscus.core.pybiscus_logger import console
 from klae.lit_klae import ConfigKLAutoEncoder, ConfigAlexDiscriminator, LitKLAutoEncoder
-from vqvae.lit_vqvae import ConfigVQAutoEncoder, LitVQVAE
+from vqvaegan.lit_vqvaegan import ConfigVQAutoEncoder, LitVQVAEGAN
 
 
 class ConfigDiffusionUnet(BaseModel):
@@ -74,10 +74,14 @@ class ConfigUnet(BaseModel):
         configuration for the UNet model
     scheduler_config: ConfigScheduler
         configuration for the scheduler
+    generator_config: ConfigVQAutoEncoder
+        configuration for the VQ AutoEncoder
+    discriminator_config: ConfigAlexDiscriminator
+        configuration for the Alex Discriminator
+    autoencoder_weights: Union[str, Path]
+        path to the pre-trained autoencoder weights
     lr: float
         learning rate for the optimizer
-    autoencoder_warm_up_n_epochs: int
-        number of epochs to warm up the autoencoder
     seed: Union[int, None]
         random seed for reproducibility
     _logging: bool
@@ -87,6 +91,7 @@ class ConfigUnet(BaseModel):
     unet_config: ConfigDiffusionUnet
     scheduler_config: ConfigScheduler
     generator_config: ConfigVQAutoEncoder
+    discriminator_config: ConfigAlexDiscriminator
     lr: float = 1e-4
     autoencoder_weights: Union[str, Path]
     seed: Union[int, None] = None
@@ -133,6 +138,7 @@ class LitDiffusionUnet(pl.LightningModule):
         unet_config: ConfigDiffusionUnet,
         scheduler_config: ConfigScheduler,
         generator_config: Union[ConfigKLAutoEncoder, ConfigVQAutoEncoder],
+        discriminator_config: Union[ConfigAlexDiscriminator, None] = None,
         lr: float = 1e-4,
         autoencoder_weights: Union[str, Path] = None,
         seed: Union[int, None] = None,
@@ -145,8 +151,9 @@ class LitDiffusionUnet(pl.LightningModule):
             set_determinism(seed=seed)
             console.print(f"[bold][yellow]Setting seed to {seed}.[/yellow][/bold]")
 
-        self.autoencoder = LitVQVAE(
+        self.autoencoder = LitVQVAEGAN(
             vqvae_config=ConfigVQAutoEncoder(**generator_config),
+            discriminator_config=ConfigAlexDiscriminator(**discriminator_config)
         )
         try:
             self.autoencoder.load_state_dict(torch.load(autoencoder_weights, map_location=self.device)["state_dict"])
@@ -258,44 +265,29 @@ class LitDiffusionUnet(pl.LightningModule):
         with autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", enabled=True):
             with torch.no_grad():
                 images = batch["image"]
-
-                z = self.autoencoder.encode_stage_2_inputs(
-                    images.float()
-                )
-
+                
+                # Encode to latents (same as training)
+                z = self.autoencoder.encode_stage_2_inputs(images.float())
+                z = z * self.scaling_factor
+                
                 noise = torch.randn_like(z)
                 timesteps = torch.randint(
-                    0, self.inferer.scheduler.num_train_timesteps, (images.shape[0],), device=images.device
+                    0, self.inferer.scheduler.num_train_timesteps, 
+                    (images.shape[0],), device=images.device
                 ).long()
-
-                noise_pred = self.inferer(
-                    inputs=images,
-                    autoencoder_model=self.autoencoder,
-                    diffusion_model=self.model,
-                    noise=noise,
-                    timesteps=timesteps
-                )
-
+                
+                # Direct model prediction (same as training)
+                noisy_latents = self.inferer.scheduler.add_noise(z, noise, timesteps)
+                noise_pred = self.model(noisy_latents, timesteps)
+                
                 loss = F.mse_loss(noise_pred.float(), noise.float())
-
+    
         if self._logging:
             self.log("val_loss", loss, prog_bar=True)
-
+    
         return {"loss": loss}
 
     def test_step(self, batch: torch.Tensor, batch_idx: int) -> DUSignature:
-        # with torch.no_grad():
-        #     images = batch["image"]
-            
-        #     reconstruction, _, _ = self.autoencoder(images)
-        #     recons_loss = F.l1_loss(reconstruction.float(), images.float())
-                
-        # if self._logging:
-        #     self.log("val_recons_loss", recons_loss, prog_bar=True)
-            
-        # return {
-        #     "recons_loss": recons_loss.detach(),
-        # }
         pass
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
@@ -334,19 +326,3 @@ class LitDiffusionUnet(pl.LightningModule):
             "gradient_clip_val": 1.0,
             "gradient_clip_algorithm": "norm",
         }
-    
-    # def on_train_epoch_end(self) -> None:
-    #     """Hook called at the end of each training epoch."""
-    #     scheduler = self.lr_schedulers()
-
-    #     if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-    #         # Update the scheduler with the latest validation loss
-    #         val_loss = self.trainer.callback_metrics.get("val_loss", None)
-    #         if val_loss is not None:
-    #             scheduler.step(val_loss.item())
-
-    #     elif isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingWarmRestarts):
-    #         # Step the scheduler at the end of each epoch
-    #         scheduler.step()
-
-    #     self.log("learning_rate", self.optimizers().param_groups[0]['lr'], prog_bar=True, sync_dist=True)
