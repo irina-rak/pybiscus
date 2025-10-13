@@ -1,6 +1,5 @@
 import json
 
-from glob import glob
 from os import path, listdir
 from pathlib import Path
 

@@ -133,41 +133,6 @@ def get_transforms_ldm(
     Returns:
         tuple[Compose, Compose]: The training and validation transforms.
     """
-    # Common preprocessing for LDM
-    # common_preprocessing = [
-    #     LoadImaged(keys=["image"]),
-    #     EnsureChannelFirstd(keys=["image"]),
-    #     Lambdad(keys="image", func=lambda x: x[0, :, :, :]),
-    #     EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
-    #     EnsureTyped(keys=["image"]),
-    #     Orientationd(keys=["image"], axcodes="RAS"),
-    #     Spacingd(keys=["image"], pixdim=pixdim, mode=("bilinear")),
-    #     # Choose one: either RandSpatialCropd OR ResizeWithPadOrCropd
-    #     # RandSpatialCropd(
-    #     #     keys=["image"],
-    #     #     roi_size=patch_size,
-    #     #     random_center=True,
-    #     #     random_size=False
-    #     # ),
-    #     CenterSpatialCropd(keys=["image"], roi_size=patch_size),
-    #     # Resized(keys=["image"], spatial_size=patch_size, mode="trilinear"),  # Resize whole image
-    #     # ScaleIntensityRanged(
-    #     #     keys=["image"],
-    #     #     a_min=-250,
-    #     #     a_max=600,
-    #     #     b_min=-1.0,  # Scale to [-1, 1] for diffusion models
-    #     #     b_max=1.0,
-    #     #     clip=True,
-    #     # ),
-    #     ScaleIntensityRangePercentilesd(
-    #         keys=["image"],
-    #         lower=0,
-    #         upper=99.5,
-    #         b_min=0,
-    #         b_max=1
-    #     ),
-    #     # Lambdad(keys=["image"], func=lambda x: torch.clamp(x, 0, 1)),
-    # ]
     common_preprocessing = [
         LoadImaged(keys=["image"]),
         EnsureChannelFirstd(keys=["image"]),
@@ -186,14 +151,19 @@ def get_transforms_ldm(
         #     method="symmetric",
         # ),
 
-        RandSpatialCropSamplesd(
-            keys=["image"],
-            roi_size=patch_size,
-            num_samples=2,  # 2 patches per image = ~400 total samples
-            random_size=False
-        ),
+        # RandSpatialCropSamplesd(
+        #     keys=["image"],
+        #     roi_size=patch_size,
+        #     num_samples=2,  # 2 patches per image = ~400 total samples
+        #     random_size=False
+        # ),
+        CenterSpatialCropd(keys=["image"], roi_size=patch_size),
+        # RandSpatialCropd( # Use this with ResizeWithPadOrCropd when setting batch size > 1, otherwise a size mismatch occurs
+        #     keys=["image"],
+        #     roi_size=patch_size,
+        #     random_size=False
+        # ),
 
-        # CenterSpatialCropd(keys=["image"], roi_size=patch_size),
         SpatialPadd(
             keys=["image"],
             spatial_size=patch_size,
@@ -201,11 +171,6 @@ def get_transforms_ldm(
             mode=("constant")
         ),
 
-        # RandSpatialCropd( # Use this with ResizeWithPadOrCropd when setting batch size > 1, otherwise a size mismatch occurs
-        #     keys=["image"],
-        #     roi_size=patch_size,
-        #     random_size=False
-        # ),
         ScaleIntensityRangePercentilesd(
             keys=["image"],
             lower=0,
@@ -387,25 +352,6 @@ class PBRLitDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
             ).get_dataset()
 
-            # self.data_train = DecathlonDataset(
-            #     root_dir=self.data_dir_train,
-            #     task="Task01_BrainTumour",
-            #     section="training",
-            #     cache_rate=self.cache_rate,
-            #     num_workers=self.num_workers,
-            #     seed=42,  # Ensure reproducibility
-            #     transform=self.train_transforms,
-            # )
-            # self.data_val = DecathlonDataset(
-            #     root_dir=self.data_dir_val,
-            #     task="Task01_BrainTumour",
-            #     section="validation",
-            #     cache_rate=self.cache_rate,
-            #     num_workers=self.num_workers,
-            #     seed=42,  # Ensure reproducibility
-            #     transform=self.val_transforms,
-            # )
-
         if stage == "test" or stage is None:
             self.data_test = CTCacheDataset(
                 data_dir=self.data_dir_test,
@@ -450,8 +396,6 @@ class PBRLitDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # drop_last=True,
             shuffle=True,
-            # collate_fn=self.collate_fn,
-            # collate_fn=self.list_data_collate,
             persistent_workers=True,  # Keep workers alive for faster training
         )
 
@@ -462,8 +406,6 @@ class PBRLitDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # drop_last=True,
             shuffle=False,
-            # collate_fn=self.collate_fn,
-            # collate_fn=self.list_data_collate,
             persistent_workers=True,
         )
 
@@ -474,6 +416,4 @@ class PBRLitDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # drop_last=True,
             shuffle=False,
-            # collate_fn=self.collate_fn,
-            # collate_fn=self.list_data_collate,
         )

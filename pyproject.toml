@@ -6,34 +6,35 @@ readme = "README.md"
 requires-python = ">=3.10"
 #authors = ["Baptiste MORISSE <baptiste.morisse@thalesgroup.com>"]
 dependencies = [
-    "einops>=0.8.0",
-    "flask-cors>=5.0.1",
-    "flask>=3.1.0",
-    "flwr>=1.7.0",
-    "lightning[pytorch-extra]>=2.5.2",
-    "pandas>=2.2.3",
-    "pydantic>=2.10.4",
-    "pyyaml>=6.0.2",
-    "torchvision>=0.20.1",
-    "trogon>=0.6.0",
-    "typer>=0.15.1",
-    "wandb>=0.19.10",
-    "pydeps>=3.0.1",
-    "dominate>=2.9.1",
-    "pillow>=11.0.0",
-    "onnx>=1.18.0",
-    "dotenv>=0.9.9",
+    "einops==0.8.1",
+    "flask-cors==6.0.1",
+    "flask==3.1.2",
+    "flwr==1.7.0",
+    "lightning[pytorch-extra]==2.5.5",
+    "pandas==2.3.2",
+    "pydantic==2.11.7",
+    "pyyaml==6.0.2",
+    "torchvision==0.21.0",
+    "trogon==0.6.0",
+    "typer==0.17.4",
+    "wandb==0.21.3",
+    "pydeps==3.0.1",
+    "dominate==2.9.1",
+    "pillow==11.3.0",
+    "onnx==1.19.0",
+    "dotenv==0.9.9",
     "rich==14.0.0",
+    "torch>=2.6.0",
 ]
 
 # Optional dependencies (medical imaging)
 
 [project.optional-dependencies]
 medical_imaging = [
-    "monai>=1.5.0",
-    "nibabel>=5.0.0",
-    "SimpleITK>=2.1.0",
-    "lpips>=0.1.4",
+    "monai==1.5.0",
+    "nibabel==5.3.2",
+    "SimpleITK==2.5.2",
+    "lpips==0.1.4",
 ]
 
 [project.scripts]

@@ -435,36 +435,9 @@ class LitVQVAEGAN(pl.LightningModule):
                 }
             }
         ]
-    
-    # def configure_schedulers(self):
-    #     """Configure schedulers for the optimizers."""
-
-    #     # Get optimizers
-    #     optimizer_gen, optimizer_disc = self.optimizers()
-
-    #     scheduler_gen = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #         optimizer_gen, mode="min", factor=0.7, patience=10
-    #     )
-    #     scheduler_disc = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #         optimizer_disc, mode="min", factor=0.7, patience=10
-    #     )
-        
-    #     return [scheduler_gen, scheduler_disc]
 
     def on_validation_epoch_end(self) -> None:
         """Handle scheduler stepping after validation."""
-        # # Debug: Print available metrics
-        # available_metrics = list(self.trainer.callback_metrics.keys())
-        # console.log(f"[blue]Available metrics: {available_metrics}[/blue]")
-        
-        # # Print specific metric values
-        # for metric in ["val_loss", "val_adv_loss", "val_recons_loss"]:
-        #     value = self.trainer.callback_metrics.get(metric, None)
-        #     if value is not None:
-        #         console.log(f"[green]{metric}: {value:.4f}[/green]")
-        #     else:
-        #         console.log(f"[red]{metric}: Not found[/red]")
-
         optimizer_gen, optimizer_disc = self.optimizers()
 
         if not optimizer_gen or not optimizer_disc:
@@ -484,11 +457,6 @@ class LitVQVAEGAN(pl.LightningModule):
             if self._logging:
                 self.log("lr_g", self.optimizers()[0].param_groups[0]["lr"], prog_bar=True, sync_dist=True)
                 self.log("lr_d", self.optimizers()[1].param_groups[0]["lr"], prog_bar=True, sync_dist=True)
-
-            console.log(
-                f"[bold][blue]Stepping schedulers: lr_g={scheduler_gen.optimizer.param_groups[0]['lr']:.6f}, "
-                f"lr_d={scheduler_disc.optimizer.param_groups[0]['lr']:.6f}[/blue][/bold]"
-            )
 
     
     # def get_scalers(self) -> tuple[GradScaler, GradScaler]:
