@@ -12,7 +12,8 @@ import pybiscus.core.pybiscus_logger as logm
 from pybiscus.ml.loops_fabric import test_loop
 
 def set_params(model: torch.nn.ModuleList, params: list[np.ndarray]):
-    params_dict = zip(model.state_dict().keys(), params)
+    # params_dict = zip(model.state_dict().keys(), params)
+    params_dict = zip((k for k in model.state_dict().keys() if "bn" not in k), params)
     state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
     model.load_state_dict(state_dict, strict=True)
 

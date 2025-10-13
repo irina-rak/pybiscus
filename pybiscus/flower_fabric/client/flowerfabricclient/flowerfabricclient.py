@@ -3,6 +3,8 @@ from collections.abc import Mapping
 import flwr as fl
 from lightning import Fabric, LightningDataModule, LightningModule
 import torch
+import torch.nn as nn
+import numpy as np
 
 from pybiscus.flower_config.config_computecontext import ConfigClientComputeContext
 from pybiscus.ml.loops_fabric import test_loop, train_loop
@@ -45,6 +47,7 @@ class FlowerFabricClient(fl.client.NumPyClient):
         num_examples: dict[str, int],
         conf_fabric: ConfigClientComputeContext,
         pre_train_val: bool = False,
+        agg_bn: bool = True,
     ) -> None:
         """Initialize the FlowerClient instance.
 
@@ -71,6 +74,12 @@ class FlowerFabricClient(fl.client.NumPyClient):
         self.conf_fabric = conf_fabric.model_dump()
         self.num_examples = num_examples
         self.pre_train_val = pre_train_val
+        self.agg_bn = agg_bn
+
+        if not self.agg_bn:
+            logm.console.log(
+                f"[blue]Client {self.cid} will NOT aggregate BatchNorm and Bias parameters[/blue]"
+            )
 
         self.optimizers = parse_optimizers(self.model.configure_optimizers())
 
@@ -91,15 +100,84 @@ class FlowerFabricClient(fl.client.NumPyClient):
             self.data.train_dataloader(), self.data.val_dataloader()
         )
 
+    # def get_parameters(self, config):
+    #     logm.console.log(f"[Client] get_parameters, config: {config}")
+    #     if self.agg_bn:
+    #         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
+    #     else:
+    #         return [
+    #             val.cpu().numpy()
+    #             for name, val in self.model.state_dict().items()
+    #             if "bn" not in name
+    #         ]
+
     def get_parameters(self, config):
         logm.console.log(f"[Client] get_parameters, config: {config}")
-        return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
+        if self.agg_bn:
+            return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
+        
+        # Get all parameter names from the model
+        all_param_names = list(self.model.state_dict().keys())
+        
+        # Find batch norm layer parameter names
+        bn_param_names = set()
+        for name, module in self.model.named_modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                # Add all parameters belonging to this batch norm layer
+                for param_name in all_param_names:
+                    if param_name.startswith(name + '.'):
+                        bn_param_names.add(param_name)
+        
+        # Filter out batch norm parameters and return as numpy arrays
+        return [
+            val.cpu().numpy()
+            for name, val in self.model.state_dict().items()
+            if name not in bn_param_names
+        ]
+
+    # def set_parameters(self, parameters):
+    #     logm.console.log("[Client] set_parameters")
+    #     if self.agg_bn:
+    #         params_dict = zip(self.model.state_dict().keys(), parameters)
+    #     else:
+    #         params_dict = zip(
+    #             (k for k in self.model.state_dict().keys() if "bn" not in k),
+    #             parameters,
+    #         )
+    #     state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+    #     self.model.load_state_dict(state_dict, strict=True)
 
     def set_parameters(self, parameters):
-        logm.console.log("[Client] set_parameters")
-        params_dict = zip(self.model.state_dict().keys(), parameters)
-        state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
-        self.model.load_state_dict(state_dict, strict=True)
+        if self.agg_bn:
+            params_dict = zip(self.model.state_dict().keys(), parameters)
+            state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
+            self.model.load_state_dict(state_dict, strict=True)
+            return
+        
+        # Get all parameter names from the model
+        all_param_names = list(self.model.state_dict().keys())
+        
+        # Find batch norm layer parameter names
+        bn_param_names = set()
+        for name, module in self.model.named_modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                # Add all parameters belonging to this batch norm layer
+                for param_name in all_param_names:
+                    if param_name.startswith(name + '.'):
+                        bn_param_names.add(param_name)
+        
+        # Filter out batch norm parameters
+        filtered_param_names = [name for name in all_param_names if name not in bn_param_names]
+        
+        # Ensure we have the right number of parameters
+        if len(filtered_param_names) != len(parameters):
+            print(f"Warning: Expected {len(filtered_param_names)} parameters, got {len(parameters)}")
+            print(f"Excluded {len(bn_param_names)} batch norm parameters: {sorted(bn_param_names)}")
+        
+        # Create state dict with filtered parameters
+        params_dict = zip(filtered_param_names, parameters)
+        state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
+        self.model.load_state_dict(state_dict, strict=False)  # Use strict=False to allow missing BN params
 
     def fit(self, parameters, config):
         logm.console.log(f"[Client {self.cid}] fit, config: {config}")

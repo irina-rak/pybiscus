@@ -24,4 +24,5 @@ class FlowerFabricClientFactory(ClientFactory):
             num_examples=self.num_examples,
             conf_fabric=self.config.client_compute_context.hardware,
             pre_train_val=self.config.client_run.pre_train_val,
+            agg_bn=self.config.client_run.agg_bn,
         )

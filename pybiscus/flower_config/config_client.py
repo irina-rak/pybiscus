@@ -46,6 +46,7 @@ class ConfigClientRun(BaseModel):
 
     cid: int            = 1
     pre_train_val: bool = False
+    agg_bn: bool        = True
 
     model_config = ConfigDict(extra="forbid")
 
