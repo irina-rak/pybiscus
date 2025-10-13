@@ -1,3 +1,4 @@
+from random import random
 from typing import Literal, List, Optional
 
 import torch
@@ -10,6 +11,7 @@ from monai.transforms import (
     LoadImaged,
     EnsureChannelFirstd,
     ScaleIntensityRanged,
+    ScaleIntensityRangePercentilesd,
     CropForegroundd,
     Orientationd,
     Spacingd,
@@ -19,12 +21,18 @@ from monai.transforms import (
     NormalizeIntensityd,
     RandScaleIntensityd,
     RandShiftIntensityd,
-    RandSpatialCropd,
     CenterSpatialCropd,
+    ResizeWithPadOrCropd,
+    RandSpatialCropd,
+    RandSpatialCropSamplesd,
     ToTensord,
     Lambdad,
     EnsureTyped,
     Resized,
+    RandRotate90d,
+    RandAffined,
+    Rand3DElasticd,
+    RandGaussianNoised
 )
 from torch.utils.data._utils.collate import default_collate
 from pydantic import BaseModel, ConfigDict
@@ -126,29 +134,114 @@ def get_transforms_ldm(
         tuple[Compose, Compose]: The training and validation transforms.
     """
     # Common preprocessing for LDM
+    # common_preprocessing = [
+    #     LoadImaged(keys=["image"]),
+    #     EnsureChannelFirstd(keys=["image"]),
+    #     Lambdad(keys="image", func=lambda x: x[0, :, :, :]),
+    #     EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
+    #     EnsureTyped(keys=["image"]),
+    #     Orientationd(keys=["image"], axcodes="RAS"),
+    #     Spacingd(keys=["image"], pixdim=pixdim, mode=("bilinear")),
+    #     # Choose one: either RandSpatialCropd OR ResizeWithPadOrCropd
+    #     # RandSpatialCropd(
+    #     #     keys=["image"],
+    #     #     roi_size=patch_size,
+    #     #     random_center=True,
+    #     #     random_size=False
+    #     # ),
+    #     CenterSpatialCropd(keys=["image"], roi_size=patch_size),
+    #     # Resized(keys=["image"], spatial_size=patch_size, mode="trilinear"),  # Resize whole image
+    #     # ScaleIntensityRanged(
+    #     #     keys=["image"],
+    #     #     a_min=-250,
+    #     #     a_max=600,
+    #     #     b_min=-1.0,  # Scale to [-1, 1] for diffusion models
+    #     #     b_max=1.0,
+    #     #     clip=True,
+    #     # ),
+    #     ScaleIntensityRangePercentilesd(
+    #         keys=["image"],
+    #         lower=0,
+    #         upper=99.5,
+    #         b_min=0,
+    #         b_max=1
+    #     ),
+    #     # Lambdad(keys=["image"], func=lambda x: torch.clamp(x, 0, 1)),
+    # ]
     common_preprocessing = [
         LoadImaged(keys=["image"]),
         EnsureChannelFirstd(keys=["image"]),
-        Lambdad(keys="image", func=lambda x: x[0, :, :, :]),
+        Lambdad(keys=["image"], func=lambda x: x[0, :, :, :]),
         EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
         EnsureTyped(keys=["image"]),
         Orientationd(keys=["image"], axcodes="RAS"),
-        # Spacingd(keys=["image"], pixdim=pixdim, mode=("bilinear")),
-        CenterSpatialCropd(keys=["image"], roi_size=patch_size),
-        Resized(keys=["image"], spatial_size=patch_size, mode="trilinear"),  # Resize whole image
-        ScaleIntensityRanged(
+        Spacingd(keys=["image"], pixdim=pixdim, mode=("bilinear")),
+        CropForegroundd(keys=["image"], source_key="image", margin=margin),
+
+        # # This ensures consistent sizes
+        # ResizeWithPadOrCropd(
+        #     keys=["image"],
+        #     spatial_size=patch_size,
+        #     mode="constant",
+        #     method="symmetric",
+        # ),
+
+        RandSpatialCropSamplesd(
             keys=["image"],
-            a_min=-250,
-            a_max=600,
-            b_min=-1.0,  # Scale to [-1, 1] for diffusion models
-            b_max=1.0,
-            clip=True,
+            roi_size=patch_size,
+            num_samples=2,  # 2 patches per image = ~400 total samples
+            random_size=False
+        ),
+
+        # CenterSpatialCropd(keys=["image"], roi_size=patch_size),
+        SpatialPadd(
+            keys=["image"],
+            spatial_size=patch_size,
+            method="symmetric",
+            mode=("constant")
+        ),
+
+        # RandSpatialCropd( # Use this with ResizeWithPadOrCropd when setting batch size > 1, otherwise a size mismatch occurs
+        #     keys=["image"],
+        #     roi_size=patch_size,
+        #     random_size=False
+        # ),
+        ScaleIntensityRangePercentilesd(
+            keys=["image"],
+            lower=0,
+            upper=99.5,
+            b_min=0,
+            b_max=1
         ),
     ]
 
     # Training-specific transforms for LDM
     train_transforms = Compose(
         common_preprocessing
+        + [
+            RandFlipd(keys=["image"], spatial_axis=0, prob=0.3),
+            RandFlipd(keys=["image"], spatial_axis=1, prob=0.3),
+            # RandRotate90d(keys=["image"], prob=0.1, max_k=1),
+            RandAffined(
+                keys=["image"],
+                prob=0.3,
+                rotate_range=(0.1, 0.1, 0.1),
+                scale_range=(0.1, 0.1, 0.1),
+                mode=("bilinear")
+            ),
+            Rand3DElasticd(
+                keys=["image"],
+                sigma_range=(5, 8),
+                magnitude_range=(50, 150),
+                prob=0.2,
+                mode=("bilinear"),
+                spatial_size=patch_size,
+                padding_mode="zeros"
+            ),
+            # RandGaussianNoised(keys=["image"], prob=0.15, mean=0.0, std=0.005),
+            # RandScaleIntensityd(keys=["image"], factors=0.05, prob=0.2),
+            # RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.5),
+        ]
         # + [
         #     # RandSpatialCropd(keys=["image"], roi_size=patch_size, random_center=True, random_size=False),
         #     CenterSpatialCropd(keys=["image"], roi_size=(96, 96, 64)),
@@ -162,8 +255,15 @@ def get_transforms_ldm(
         # ]
     )
 
-    # Validation transforms (no augmentation)
-    val_transforms = Compose(common_preprocessing)
+    # Validation transforms (no augmentation, use center crop for consistency)
+    val_preprocessing = common_preprocessing.copy()
+    # Replace RandSpatialCropd with CenterSpatialCropd for validation
+    for i, transform in enumerate(val_preprocessing):
+        if isinstance(transform, RandSpatialCropd):
+            val_preprocessing[i] = CenterSpatialCropd(keys=["image"], roi_size=patch_size)
+            break
+    
+    val_transforms = Compose(val_preprocessing)
 
     return train_transforms, val_transforms
 
@@ -201,6 +301,8 @@ class ConfigPBR(BaseModel):
     batch_size: int = 1
     # shape_img: List = [96, 96, 96]
     patch_size: List[int] = [96, 96, 96]
+    spacing: List[float] = [1.0, 1.0, 2.0]
+    margin: int = 25
     augment: bool = False
     preprocessed: bool = True
     cache_rate: float = 1.0
@@ -236,6 +338,8 @@ class PBRLitDataModule(pl.LightningDataModule):
         dir_test: str,
         batch_size: int = 1,
         patch_size: tuple[float, float, float, float] = (96, 96, 96),
+        spacing: tuple[float, float, float] = (1.0, 1.0, 2.0),
+        margin: int = 25,
         augment: bool = False,
         preprocessed: bool = True,
         cache_rate: float = 1.0,
@@ -257,13 +361,15 @@ class PBRLitDataModule(pl.LightningDataModule):
         if hasattr(self, "task_type") and self.task_type == "generation":
             self.train_transforms, self.val_transforms = get_transforms_ldm(
                 patch_size=tuple(patch_size),
-                pixdim=(1.0, 1.0, 2.0),
+                pixdim=spacing,
+                margin=margin,
             )
         else:
             # Default segmentation transforms
             self.train_transforms, self.val_transforms = get_transforms(
                 patch_size=tuple(patch_size),
-                pixdim=(1.0, 1.0, 2.0),
+                pixdim=spacing,
+                margin=margin,
             )
 
     def setup(self, stage: Optional[str] = None):
@@ -346,6 +452,7 @@ class PBRLitDataModule(pl.LightningDataModule):
             shuffle=True,
             # collate_fn=self.collate_fn,
             # collate_fn=self.list_data_collate,
+            persistent_workers=True,  # Keep workers alive for faster training
         )
 
     def val_dataloader(self):
@@ -357,6 +464,7 @@ class PBRLitDataModule(pl.LightningDataModule):
             shuffle=False,
             # collate_fn=self.collate_fn,
             # collate_fn=self.list_data_collate,
+            persistent_workers=True,
         )
 
     def test_dataloader(self):

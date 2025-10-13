@@ -21,6 +21,8 @@ model:
       - unet3d
       - klae
       - diffunet
+      - vqvae
+      - vqvaegan
 strategy:
   - path: "./pybiscus-plugins/strategy"
     modules:
