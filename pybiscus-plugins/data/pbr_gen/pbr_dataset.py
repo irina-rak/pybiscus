@@ -27,11 +27,13 @@ class CTCacheDataset:
         self.data = self.create_data_list()
 
         # Create CacheDataset
+        # Note: num_workers=0 for CacheDataset to avoid memory issues
+        # The DataLoader will handle parallelism during training
         self.dataset = CacheDataset(
             data=self.data,
             transform=self.transforms,
             cache_rate=self.cache_rate,
-            num_workers=self.num_workers,
+            num_workers=self.num_workers,  # Set to 0 to prevent double worker spawning
             # copy_cache=False,
             # runtime_cache="processes",
         )
@@ -62,6 +64,7 @@ class CTCacheDataset:
             
         # data = [{"image": image_name, "label": label_name, "name": name} for image_name, label_name, name in zip(images, labels, names)]
         data = [{"image": image_name, "name": name} for image_name, name in zip(images, names)]
+        console.log(data)
         return data
 
     def get_dataset(self):

@@ -396,7 +396,8 @@ class PBRLitDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # drop_last=True,
             shuffle=True,
-            persistent_workers=True,  # Keep workers alive for faster training
+            persistent_workers=True if self.num_workers > 0 else False,  # Keep workers alive for faster training
+            pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -406,7 +407,8 @@ class PBRLitDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # drop_last=True,
             shuffle=False,
-            persistent_workers=True,
+            persistent_workers=True if self.num_workers > 0 else False,
+            pin_memory=True,
         )
 
     def test_dataloader(self):

@@ -34,8 +34,8 @@ class ConfigVQAutoEncoder(BaseModel):
     channels: Sequence[int]
     num_res_layers: int
     num_res_channels: Union[Sequence[int], int]
-    # downsample_parameters: Union[Sequence[List[int, int, int, int]], List[int, int, int, int]]
-    # upsample_parameters: Union[Sequence[List[int, int, int, int]], List[int, int, int, int]]
+    downsample_parameters: Union[Sequence[Tuple[int, int, int, int]], Tuple[int, int, int, int]]
+    upsample_parameters: Union[Sequence[Tuple[int, int, int, int, int]], Tuple[int, int, int, int, int]]
     num_embeddings: int
     embedding_dim: int
     use_checkpointing: bool = False
@@ -333,11 +333,20 @@ class LitVQVAEGAN(pl.LightningModule):
 
             loss_d = loss_d / self.manual_accumulate_grad_batches
 
-            self.manual_backward(loss_d)
-            if not is_accumulate_grad_batches:
-                if self.trainer.precision == 16:
+            # Scale and backward for discriminator
+            if scaler:
+                scaler.scale(loss_d).backward()
+                if not is_accumulate_grad_batches:
+                    # Unscale gradients before clipping
+                    scaler.unscale_(opt_d)
                     torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
-                opt_d.step()
+                    scaler.step(opt_d)
+                    scaler.update()
+            else:
+                self.manual_backward(loss_d)
+                if not is_accumulate_grad_batches:
+                    torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                    opt_d.step()
         
         if self._logging:
             self.log("train_recons_loss", recons_loss, prog_bar=True, sync_dist=True)
